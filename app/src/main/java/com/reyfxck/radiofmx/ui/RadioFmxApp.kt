@@ -189,7 +189,7 @@ fun RadioFmxApp() {
     val logs by DebugLog.entries.collectAsState()
 
     LaunchedEffect(Unit) {
-        DebugLog.i("APP", "RadioFMX 0.4.0 iniciado")
+        DebugLog.i("APP", "RadioFMX 0.5.1-test iniciado")
     }
 
     DisposableEffect(lineageBackend) {

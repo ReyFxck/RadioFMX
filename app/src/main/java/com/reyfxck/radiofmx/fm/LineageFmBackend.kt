@@ -9,6 +9,7 @@ import android.os.IBinder
 import com.caf.fmradio.IFMRadioService
 import com.caf.fmradio.IFMRadioServiceCallbacks
 import com.reyfxck.radiofmx.debug.DebugLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -320,29 +321,47 @@ class LineageFmBackend(context: Context) {
                 }
 
                 _state.value = _state.value.copy(scanning = true, lastError = null)
-                val completed = withTimeoutOrNull(45_000) {
+                val callbackCompleted = withTimeoutOrNull(45_000) {
                     completion.await()
                     true
                 } ?: false
-                if (!completed) {
-                    return@launch setError("Tempo limite de 45 s esperando callback de conclusão da busca FM.")
-                }
 
+                // Some vendor FM services populate the search list but fail to deliver
+                // onSearchListComplete. Preserve usable results if that callback is lost.
                 val raw = svc.searchList ?: intArrayOf()
                 val stations = raw.filter { it in 87500..108000 }
                     .map { it / 1000f }
                     .distinct()
                     .sorted()
 
-                DebugLog.i("SCAN", "Busca concluída; estações válidas=${stations.size}: ${stations.joinToString { "%.1f".format(it) }} MHz")
+                if (!callbackCompleted) {
+                    if (stations.isEmpty()) {
+                        return@launch setError(
+                            "A busca foi aceita, mas após 45 s não chegou o callback nem uma lista de estações."
+                        )
+                    }
+                    DebugLog.w(
+                        "SCAN",
+                        "Callback não chegou em 45 s; aproveitando ${stations.size} estação(ões) retornadas pela lista do serviço."
+                    )
+                }
+
+                DebugLog.i("SCAN", "Busca concluída; callback=$callbackCompleted; estações válidas=${stations.size}: ${stations.joinToString { "%.1f".format(it) }} MHz")
                 _state.value = _state.value.copy(
                     scanning = false,
                     stations = stations,
                     lastError = if (stations.isEmpty()) {
-                        "O callback chegou, mas o serviço não retornou estações."
+                        if (callbackCompleted) {
+                            "O callback chegou, mas o serviço não retornou estações."
+                        } else {
+                            "O serviço não concluiu a busca nem retornou estações."
+                        }
                     } else null,
                 )
                 refresh()
+            } catch (cancelled: CancellationException) {
+                DebugLog.i("SCAN", "Busca cancelada; cancelamento tratado normalmente.")
+                _state.value = _state.value.copy(scanning = false)
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(scanning = false)
                 setError(t)
