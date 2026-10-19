@@ -2,10 +2,9 @@ package com.reyfxck.radiofmx.ui
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioDeviceCallback
-import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,6 +16,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,17 +40,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Radio
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Speaker
 import androidx.compose.material.icons.rounded.VolumeDown
@@ -60,6 +66,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +80,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -87,11 +95,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.AudioAttributes as Media3AudioAttributes
@@ -102,6 +113,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.reyfxck.radiofmx.audio.AudioRoute
 import com.reyfxck.radiofmx.audio.detectAudioRoute
 import com.reyfxck.radiofmx.fm.FmRadioBridge
+import com.reyfxck.radiofmx.fm.LineageFmBackend
+import com.reyfxck.radiofmx.fm.LineageFmState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -110,6 +123,7 @@ import kotlin.math.roundToInt
 
 private const val MinFm = 87.5f
 private const val MaxFm = 108.0f
+private const val BandSteps = 205
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -119,8 +133,11 @@ fun RadioFmxApp() {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    var poweredOn by rememberSaveable { mutableStateOf(prefs.getBoolean("powered_on", false)) }
-    var scanning by rememberSaveable { mutableStateOf(false) }
+    var leftDrawerOpen by rememberSaveable { mutableStateOf(false) }
+    var rightDrawerOpen by rememberSaveable { mutableStateOf(false) }
+
+    var uiPoweredOn by rememberSaveable { mutableStateOf(prefs.getBoolean("powered_on", false)) }
+    var simulatedScanning by rememberSaveable { mutableStateOf(false) }
     var frequency by rememberSaveable {
         mutableFloatStateOf(prefs.getFloat("frequency", 95.1f).coerceIn(MinFm, MaxFm))
     }
@@ -136,9 +153,9 @@ fun RadioFmxApp() {
         }
     }
 
-    fun setFrequency(value: Float) {
+    fun setFrequency(value: Float, persist: Boolean = true) {
         frequency = quantize(value)
-        prefs.edit().putFloat("frequency", frequency).apply()
+        if (persist) prefs.edit().putFloat("frequency", frequency).apply()
     }
 
     fun persistFavorites() {
@@ -147,7 +164,60 @@ fun RadioFmxApp() {
             .apply()
     }
 
+    fun toggleFavorite(value: Float) {
+        val tuned = quantize(value)
+        val existing = favorites.indexOfFirst { abs(it - tuned) < 0.05f }
+        if (existing >= 0) {
+            favorites.removeAt(existing)
+        } else {
+            favorites.add(tuned)
+            favorites.sort()
+        }
+        persistFavorites()
+    }
+
     val oemFmPackage = remember { FmRadioBridge.findAvailablePackage(context) }
+
+    val lineageBackend = remember { LineageFmBackend(context) }
+    val fmState by lineageBackend.state.collectAsState()
+
+    DisposableEffect(lineageBackend) {
+        lineageBackend.connect()
+        onDispose { lineageBackend.disconnect() }
+    }
+
+    LaunchedEffect(fmState.connected, fmState.powered) {
+        while (fmState.connected) {
+            lineageBackend.refresh()
+            delay(if (fmState.powered) 900 else 1800)
+        }
+    }
+
+    val poweredOn = if (fmState.connected) fmState.powered else uiPoweredOn
+    val scanning = if (fmState.connected) fmState.scanning else simulatedScanning
+
+    LaunchedEffect(uiPoweredOn) {
+        prefs.edit().putBoolean("powered_on", uiPoweredOn).apply()
+    }
+
+    LaunchedEffect(simulatedScanning) {
+        if (!simulatedScanning || fmState.connected) return@LaunchedEffect
+
+        val start = frequency
+        var cursor = MinFm
+        repeat(BandSteps + 1) {
+            if (!simulatedScanning || fmState.connected) return@LaunchedEffect
+            frequency = quantize(cursor)
+            cursor += 0.1f
+            delay(42)
+        }
+
+        setFrequency(start)
+        simulatedScanning = false
+        snackbar.showSnackbar(
+            "Varredura terminou. Sem backend FM acessível, não dá para medir sinal real."
+        )
+    }
 
     val audioManager = remember {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -164,19 +234,15 @@ fun RadioFmxApp() {
         volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
     }
 
-    DisposableEffect(audioManager) {
-        val callback = object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-                audioRoute = detectAudioRoute(audioManager)
-            }
+    LaunchedEffect(audioManager) {
+        while (true) {
+            val systemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (systemVolume != volume) volume = systemVolume
 
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                audioRoute = detectAudioRoute(audioManager)
-            }
-        }
-        audioManager.registerAudioDeviceCallback(callback, null)
-        onDispose {
-            audioManager.unregisterAudioDeviceCallback(callback)
+            val currentRoute = detectAudioRoute(audioManager)
+            if (currentRoute != audioRoute) audioRoute = currentRoute
+
+            delay(180)
         }
     }
 
@@ -221,19 +287,7 @@ fun RadioFmxApp() {
     }
 
     LaunchedEffect(poweredOn) {
-        prefs.edit().putBoolean("powered_on", poweredOn).apply()
-        if (!poweredOn) {
-            scanning = false
-            player.pause()
-        }
-    }
-
-    LaunchedEffect(scanning, poweredOn) {
-        if (!scanning || !poweredOn) return@LaunchedEffect
-        while (scanning && poweredOn) {
-            delay(85)
-            setFrequency(if (frequency >= MaxFm) MinFm else frequency + 0.1f)
-        }
+        if (!poweredOn) player.pause()
     }
 
     val openAudio = rememberLauncherForActivityResult(
@@ -254,149 +308,316 @@ fun RadioFmxApp() {
         }
     }
 
-    Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
-        snackbarHost = { SnackbarHost(snackbar) },
-        containerColor = MaterialTheme.colorScheme.background,
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(padding)
-                .padding(horizontal = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Spacer(Modifier.height(4.dp))
+    fun tuneTo(value: Float) {
+        simulatedScanning = false
+        setFrequency(value)
+        if (fmState.connected && poweredOn) {
+            lineageBackend.tune(frequency)
+        }
+    }
 
-            Header(poweredOn)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            snackbarHost = { SnackbarHost(snackbar) },
+            containerColor = MaterialTheme.colorScheme.background,
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(padding)
+                    .padding(horizontal = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Spacer(Modifier.height(4.dp))
 
-            FrequencyCard(
-                frequency = frequency,
-                poweredOn = poweredOn,
-                scanning = scanning,
-                isFavorite = favorites.any { abs(it - frequency) < 0.05f },
-                onPower = { poweredOn = !poweredOn },
-                onFrequencyChange = ::setFrequency,
-                onPrevious = {
-                    setFrequency(if (frequency <= MinFm) MaxFm else frequency - 0.1f)
-                },
-                onNext = {
-                    setFrequency(if (frequency >= MaxFm) MinFm else frequency + 0.1f)
-                },
-                onScan = { scanning = !scanning },
-                onFavorite = {
-                    val existing = favorites.indexOfFirst { abs(it - frequency) < 0.05f }
-                    if (existing >= 0) {
-                        favorites.removeAt(existing)
-                    } else {
-                        favorites.add(frequency)
-                        favorites.sort()
-                    }
-                    persistFavorites()
-                },
-            )
-
-            if (favorites.isNotEmpty()) {
-                Text(
-                    text = "Canais salvos",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+                Header(
+                    poweredOn = poweredOn,
+                    onStations = {
+                        rightDrawerOpen = false
+                        leftDrawerOpen = true
+                    },
+                    onDebug = {
+                        leftDrawerOpen = false
+                        rightDrawerOpen = true
+                    },
                 )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    favorites.forEach { favorite ->
-                        AssistChip(
-                            onClick = {
-                                scanning = false
-                                setFrequency(favorite)
-                            },
-                            label = { Text("${formatFrequency(favorite)} MHz") },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Rounded.Favorite,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
-                        )
-                    }
-                }
-            }
 
-            VolumeCard(
-                route = audioRoute,
-                volume = volume,
-                maxVolume = maxVolume,
-                onVolumeDown = { setVolume(volume - 1) },
-                onVolumeUp = { setVolume(volume + 1) },
-                onVolumeChange = { setVolume(it.roundToInt()) },
-            )
+                FrequencyCard(
+                    frequency = frequency,
+                    poweredOn = poweredOn,
+                    scanning = scanning,
+                    hardwareBackend = fmState.connected,
+                    isFavorite = favorites.any { abs(it - frequency) < 0.05f },
+                    onPower = {
+                        if (fmState.connected) {
+                            lineageBackend.setPower(!fmState.powered, frequency)
+                        } else {
+                            uiPoweredOn = !uiPoweredOn
+                            if (!uiPoweredOn) simulatedScanning = false
+                        }
+                    },
+                    onFrequencyChange = { setFrequency(it, persist = false) },
+                    onFrequencyChangeFinished = {
+                        setFrequency(frequency)
+                        if (fmState.connected && poweredOn) lineageBackend.tune(frequency)
+                    },
+                    onPrevious = {
+                        tuneTo(if (frequency <= MinFm) MaxFm else frequency - 0.1f)
+                    },
+                    onNext = {
+                        tuneTo(if (frequency >= MaxFm) MinFm else frequency + 0.1f)
+                    },
+                    onScan = {
+                        if (fmState.connected) {
+                            if (fmState.scanning) lineageBackend.cancelScan() else lineageBackend.scan()
+                        } else {
+                            simulatedScanning = !simulatedScanning
+                        }
+                    },
+                    onFavorite = { toggleFavorite(frequency) },
+                )
 
-            OemFmCard(
-                packageName = oemFmPackage,
-                frequency = frequency,
-                onOpen = {
-                    if (!FmRadioBridge.launch(context, frequency)) {
-                        scope.launch {
-                            snackbar.showSnackbar(
-                                "Este Android não expôs um tuner FM compatível ao RadioFMX."
+                if (favorites.isNotEmpty()) {
+                    Text(
+                        text = "Canais salvos",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        favorites.forEach { favorite ->
+                            AssistChip(
+                                onClick = { tuneTo(favorite) },
+                                label = { Text("${formatFrequency(favorite)} MHz") },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.Favorite,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
                             )
                         }
                     }
-                },
-            )
+                }
 
-            LocalAudioCard(
-                title = localTitle,
-                isPlaying = isPlaying,
-                hasAudio = localUri != null,
-                poweredOn = poweredOn,
-                onChoose = { openAudio.launch(arrayOf("audio/*")) },
-                onPlayPause = {
-                    if (player.mediaItemCount == 0 || !poweredOn) return@LocalAudioCard
-                    if (player.isPlaying) player.pause() else player.play()
-                },
-            )
+                VolumeCard(
+                    route = audioRoute,
+                    volume = volume,
+                    maxVolume = maxVolume,
+                    fmBackendConnected = fmState.connected,
+                    fmPowered = fmState.powered,
+                    fmSpeakerEnabled = fmState.speakerEnabled,
+                    onVolumeDown = { setVolume(volume - 1) },
+                    onVolumeUp = { setVolume(volume + 1) },
+                    onVolumeChange = { setVolume(it.roundToInt()) },
+                    onSpeakerToggle = {
+                        lineageBackend.setSpeaker(!fmState.speakerEnabled)
+                    },
+                )
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-            ) {
-                Row(
-                    modifier = Modifier.padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                FmBackendCard(
+                    fmState = fmState,
+                    packageName = oemFmPackage,
+                    frequency = frequency,
+                    onReconnect = { lineageBackend.connect() },
+                    onOpen = {
+                        if (!FmRadioBridge.launch(context, frequency)) {
+                            scope.launch {
+                                snackbar.showSnackbar(
+                                    "Nenhum app FM compatível pôde ser aberto."
+                                )
+                            }
+                        }
+                    },
+                )
+
+                LocalAudioCard(
+                    title = localTitle,
+                    isPlaying = isPlaying,
+                    hasAudio = localUri != null,
+                    poweredOn = poweredOn,
+                    onChoose = { openAudio.launch(arrayOf("audio/*")) },
+                    onPlayPause = {
+                        if (player.mediaItemCount == 0 || !poweredOn) return@LocalAudioCard
+                        if (player.isPlaying) player.pause() else player.play()
+                    },
+                )
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
                 ) {
-                    Icon(Icons.Rounded.WifiOff, contentDescription = null)
-                    Column {
-                        Text("Offline de verdade", fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Rounded.WifiOff, contentDescription = null)
+                        Column {
+                            Text("Offline de verdade", fontWeight = FontWeight.Bold)
+                            Text(
+                                if (fmState.connected) {
+                                    "Backend Lineage/CAF conectado: power, tune, scan e speaker podem controlar o tuner físico."
+                                } else {
+                                    "Sem INTERNET. Arraste da esquerda para canais e da direita para manutenção."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+
+                fmState.lastError?.let { error ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                    ) {
                         Text(
-                            "Sem INTERNET. O scan percorre a banda, mas detectar sinal FM real exige um backend de tuner do fabricante.",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = error,
+                            modifier = Modifier.padding(16.dp),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
                         )
                     }
                 }
-            }
 
-            Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(28.dp))
+            }
+        }
+
+        if (!leftDrawerOpen && !rightDrawerOpen) {
+            EdgeOpenZone(
+                left = true,
+                modifier = Modifier.align(Alignment.CenterStart),
+                onOpen = {
+                    rightDrawerOpen = false
+                    leftDrawerOpen = true
+                },
+            )
+            EdgeOpenZone(
+                left = false,
+                modifier = Modifier.align(Alignment.CenterEnd),
+                onOpen = {
+                    leftDrawerOpen = false
+                    rightDrawerOpen = true
+                },
+            )
+        }
+
+        if (leftDrawerOpen || rightDrawerOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.48f))
+                    .clickable {
+                        leftDrawerOpen = false
+                        rightDrawerOpen = false
+                    }
+            )
+        }
+
+        if (leftDrawerOpen) {
+            StationDrawer(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.88f),
+                currentFrequency = frequency,
+                detected = fmState.stations,
+                favorites = favorites,
+                hardwareBackend = fmState.connected,
+                onTune = {
+                    tuneTo(it)
+                    leftDrawerOpen = false
+                },
+                onFavorite = ::toggleFavorite,
+                onClose = { leftDrawerOpen = false },
+            )
+        }
+
+        if (rightDrawerOpen) {
+            DebugDrawer(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.90f),
+                fmState = fmState,
+                oemPackage = oemFmPackage,
+                route = audioRoute,
+                volume = volume,
+                maxVolume = maxVolume,
+                currentFrequency = frequency,
+                onRefresh = { lineageBackend.refresh() },
+                onReconnect = { lineageBackend.connect() },
+                onOpenFm = { FmRadioBridge.launch(context, frequency) },
+                onClose = { rightDrawerOpen = false },
+            )
         }
     }
 }
 
 @Composable
-private fun Header(poweredOn: Boolean) {
+private fun EdgeOpenZone(
+    left: Boolean,
+    modifier: Modifier = Modifier,
+    onOpen: () -> Unit,
+) {
+    var drag by remember { mutableFloatStateOf(0f) }
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(24.dp)
+            .pointerInput(left) {
+                detectHorizontalDragGestures(
+                    onDragStart = { drag = 0f },
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        drag += amount
+                    },
+                    onDragEnd = {
+                        if ((left && drag > 55f) || (!left && drag < -55f)) onOpen()
+                        drag = 0f
+                    },
+                    onDragCancel = { drag = 0f },
+                )
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
+                .width(4.dp)
+                .height(72.dp)
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
+        )
+    }
+}
+
+@Composable
+private fun Header(
+    poweredOn: Boolean,
+    onStations: () -> Unit,
+    onDebug: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column {
+        IconButton(onClick = onStations) {
+            Icon(Icons.Rounded.Menu, contentDescription = "Abrir rádios")
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "RadioFMX",
                 style = MaterialTheme.typography.headlineLarge,
@@ -410,7 +631,7 @@ private fun Header(poweredOn: Boolean) {
         }
 
         Surface(
-            shape = RoundedCornerShape(22.dp),
+            shape = RoundedCornerShape(18.dp),
             color = if (poweredOn) {
                 MaterialTheme.colorScheme.primary
             } else {
@@ -420,13 +641,17 @@ private fun Header(poweredOn: Boolean) {
             Icon(
                 imageVector = Icons.Rounded.Radio,
                 contentDescription = null,
-                modifier = Modifier.padding(14.dp).size(28.dp),
+                modifier = Modifier.padding(11.dp).size(24.dp),
                 tint = if (poweredOn) {
                     MaterialTheme.colorScheme.onPrimary
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+        }
+
+        IconButton(onClick = onDebug) {
+            Icon(Icons.Rounded.BugReport, contentDescription = "Abrir manutenção")
         }
     }
 }
@@ -436,9 +661,11 @@ private fun FrequencyCard(
     frequency: Float,
     poweredOn: Boolean,
     scanning: Boolean,
+    hardwareBackend: Boolean,
     isFavorite: Boolean,
     onPower: () -> Unit,
     onFrequencyChange: (Float) -> Unit,
+    onFrequencyChangeFinished: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onScan: () -> Unit,
@@ -475,24 +702,25 @@ private fun FrequencyCard(
             ) {
                 Column {
                     Text(
-                        "FM RECEIVER",
+                        if (hardwareBackend) "FM HARDWARE" else "FM RECEIVER",
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Black,
                     )
-                    if (poweredOn) {
-                        Text(
-                            if (scanning) "PROCURANDO..." else "ON AIR",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Black,
-                        )
-                    } else {
-                        Text(
-                            "DESLIGADO",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
+                    Text(
+                        when {
+                            scanning -> "PROCURANDO..."
+                            poweredOn && hardwareBackend -> "ON AIR • TUNER"
+                            poweredOn -> "ON AIR • UI"
+                            else -> "DESLIGADO"
+                        },
+                        color = if (poweredOn) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Black,
+                    )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -545,9 +773,10 @@ private fun FrequencyCard(
             Slider(
                 value = frequency,
                 onValueChange = onFrequencyChange,
+                onValueChangeFinished = onFrequencyChangeFinished,
                 valueRange = MinFm..MaxFm,
                 steps = 204,
-                enabled = poweredOn,
+                enabled = poweredOn && !scanning,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(
@@ -564,8 +793,8 @@ private fun FrequencyCard(
             ) {
                 FilledTonalButton(
                     onClick = onPrevious,
-                    enabled = poweredOn,
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
+                    enabled = poweredOn && !scanning,
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
                 ) {
                     Icon(Icons.Rounded.ChevronLeft, contentDescription = "0,1 MHz abaixo")
                     Text("0.1")
@@ -583,8 +812,8 @@ private fun FrequencyCard(
 
                 FilledTonalButton(
                     onClick = onNext,
-                    enabled = poweredOn,
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
+                    enabled = poweredOn && !scanning,
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
                 ) {
                     Text("0.1")
                     Icon(Icons.Rounded.ChevronRight, contentDescription = "0,1 MHz acima")
@@ -592,10 +821,10 @@ private fun FrequencyCard(
             }
 
             Text(
-                text = if (poweredOn) {
-                    "Sintonizado em ${formatFrequency(frequency)} MHz"
+                text = if (hardwareBackend) {
+                    "A frequência selecionada é enviada ao tuner físico."
                 } else {
-                    "Ligue o receiver para sintonizar"
+                    "Ligue o receiver e selecione a frequência. O hardware depende do backend da ROM."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -664,9 +893,13 @@ private fun VolumeCard(
     route: AudioRoute,
     volume: Int,
     maxVolume: Int,
+    fmBackendConnected: Boolean,
+    fmPowered: Boolean,
+    fmSpeakerEnabled: Boolean,
     onVolumeDown: () -> Unit,
     onVolumeUp: () -> Unit,
     onVolumeChange: (Float) -> Unit,
+    onSpeakerToggle: () -> Unit,
 ) {
     val percent = if (maxVolume > 0) ((volume * 100f) / maxVolume).roundToInt() else 0
 
@@ -705,6 +938,13 @@ private fun VolumeCard(
                         "${route.label} • $percent%",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (fmBackendConnected) {
+                        Text(
+                            if (fmSpeakerEnabled) "FM → alto-falante" else "FM → fone/rota padrão",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
             }
 
@@ -726,29 +966,61 @@ private fun VolumeCard(
                     Icon(Icons.Rounded.VolumeUp, contentDescription = "Aumentar volume")
                 }
             }
+
+            FilledTonalButton(
+                onClick = onSpeakerToggle,
+                enabled = fmBackendConnected && fmPowered,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.Speaker, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (fmSpeakerEnabled) "Usar fone / rota padrão" else "Usar alto-falante")
+            }
         }
     }
 }
 
 @Composable
-private fun OemFmCard(
+private fun FmBackendCard(
+    fmState: LineageFmState,
     packageName: String?,
     frequency: Float,
+    onReconnect: () -> Unit,
     onOpen: () -> Unit,
 ) {
+    val subtitle = when {
+        fmState.connected ->
+            "Lineage/CAF conectado. Controle direto de power, sintonia, scan e speaker disponível."
+        fmState.available ->
+            "A rádio Lineage/CAF foi encontrada, mas o serviço ainda não conectou."
+        packageName != null ->
+            "App FM detectado: $packageName. Sem Binder conhecido, o RadioFMX pode abrir o app da ROM."
+        else ->
+            "Nenhum backend FM conhecido foi detectado neste momento."
+    }
+
     InfoCard(
         icon = Icons.Rounded.Radio,
         title = "Tuner FM físico",
-        subtitle = if (packageName != null) {
-            "Backend OEM detectado. O RadioFMX tentará entregar ${formatFrequency(frequency)} MHz ao app do fabricante."
-        } else {
-            "O sistema não expôs um app/tuner FM compatível. A interface sintoniza a banda, mas o chip físico continua bloqueado pelo fabricante."
-        },
+        subtitle = subtitle,
     ) {
-        Button(onClick = onOpen, enabled = packageName != null) {
-            Icon(Icons.Rounded.OpenInNew, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Sintonizar no FM nativo")
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = onReconnect) {
+                Icon(Icons.Rounded.Refresh, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Reconectar")
+            }
+            Button(
+                onClick = onOpen,
+                enabled = packageName != null,
+            ) {
+                Icon(Icons.Rounded.OpenInNew, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("${formatFrequency(frequency)}")
+            }
         }
     }
 }
@@ -789,6 +1061,274 @@ private fun LocalAudioCard(
                 Text(if (isPlaying) "Pausar" else "Tocar")
             }
         }
+    }
+}
+
+@Composable
+private fun StationDrawer(
+    modifier: Modifier,
+    currentFrequency: Float,
+    detected: List<Float>,
+    favorites: List<Float>,
+    hardwareBackend: Boolean,
+    onTune: (Float) -> Unit,
+    onFavorite: (Float) -> Unit,
+    onClose: () -> Unit,
+) {
+    var closeDrag by remember { mutableFloatStateOf(0f) }
+
+    Surface(
+        modifier = modifier.pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragStart = { closeDrag = 0f },
+                onHorizontalDrag = { change, amount ->
+                    change.consume()
+                    closeDrag += amount
+                },
+                onDragEnd = {
+                    if (closeDrag < -65f) onClose()
+                    closeDrag = 0f
+                },
+                onDragCancel = { closeDrag = 0f },
+            )
+        },
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 18.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(WindowInsets.safeDrawing.asPaddingValues())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Rádios", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
+            Text(
+                "← arraste para fechar",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+            )
+
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Sintonizada", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "${formatFrequency(currentFrequency)} MHz",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                    )
+                }
+            }
+
+            Text("Encontradas pelo scan", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (detected.isEmpty()) {
+                Text(
+                    if (hardwareBackend) {
+                        "Nenhuma estação listada ainda. Ligue o tuner e rode SCAN."
+                    } else {
+                        "O backend físico ainda não está conectado; sem ele não dá para identificar estações reais."
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                detected.forEach { station ->
+                    ChannelRow(
+                        frequency = station,
+                        detail = "Detectada pelo tuner",
+                        favorite = favorites.any { abs(it - station) < 0.05f },
+                        onClick = { onTune(station) },
+                        onFavorite = { onFavorite(station) },
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            Text("Favoritas", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (favorites.isEmpty()) {
+                Text("Nenhum canal salvo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                favorites.forEach { station ->
+                    ChannelRow(
+                        frequency = station,
+                        detail = "Canal salvo",
+                        favorite = true,
+                        onClick = { onTune(station) },
+                        onFavorite = { onFavorite(station) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelRow(
+    frequency: Float,
+    detail: String,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onFavorite: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "${formatFrequency(frequency)} MHz",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(detail, style = MaterialTheme.typography.bodySmall)
+            }
+            IconButton(onClick = onFavorite) {
+                Icon(
+                    if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = if (favorite) "Remover favorito" else "Favoritar",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DebugDrawer(
+    modifier: Modifier,
+    fmState: LineageFmState,
+    oemPackage: String?,
+    route: AudioRoute,
+    volume: Int,
+    maxVolume: Int,
+    currentFrequency: Float,
+    onRefresh: () -> Unit,
+    onReconnect: () -> Unit,
+    onOpenFm: () -> Unit,
+    onClose: () -> Unit,
+) {
+    var closeDrag by remember { mutableFloatStateOf(0f) }
+
+    Surface(
+        modifier = modifier.pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragStart = { closeDrag = 0f },
+                onHorizontalDrag = { change, amount ->
+                    change.consume()
+                    closeDrag += amount
+                },
+                onDragEnd = {
+                    if (closeDrag > 65f) onClose()
+                    closeDrag = 0f
+                },
+                onDragCancel = { closeDrag = 0f },
+            )
+        },
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 18.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(WindowInsets.safeDrawing.asPaddingValues())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Manutenção", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
+            Text(
+                "arraste → para fechar",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+            )
+
+            DebugValue("RadioFMX", "0.3.0")
+            DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
+            DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
+            DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
+            DebugValue("Saída Android", route.label)
+            DebugValue("Volume", "$volume / $maxVolume")
+            DebugValue("App FM detectado", oemPackage ?: "nenhum")
+            DebugValue("CAF instalado", yesNo(fmState.available))
+            DebugValue("Binder CAF", if (fmState.connected) "conectado" else "desconectado")
+            DebugValue("FM ligado", yesNo(fmState.powered))
+            DebugValue("Scan físico", yesNo(fmState.scanning))
+            DebugValue("Speaker FM", yesNo(fmState.speakerEnabled))
+            DebugValue("Antena disponível", yesNo(fmState.antennaAvailable))
+            DebugValue("Fone visto pelo FM", yesNo(fmState.wiredHeadsetAvailable))
+            DebugValue("RSSI", fmState.rssi?.toString() ?: "—")
+            DebugValue("Estações encontradas", fmState.stations.size.toString())
+            DebugValue("RDS PS", fmState.programService.ifBlank { "—" })
+            DebugValue("RadioText", fmState.radioText.ifBlank { "—" })
+            DebugValue("Internet", "permissão ausente")
+
+            fmState.lastError?.let {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                ) {
+                    Text(
+                        text = it,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+
+            FilledTonalButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Rounded.Refresh, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Atualizar diagnóstico")
+            }
+            OutlinedButton(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) {
+                Text("Reconectar backend FM")
+            }
+            Button(
+                onClick = onOpenFm,
+                enabled = oemPackage != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.OpenInNew, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Abrir rádio da ROM")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DebugValue(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(0.42f),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(0.58f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -847,6 +1387,8 @@ private fun quantize(value: Float): Float =
 
 private fun formatFrequency(value: Float): String =
     String.format(Locale.US, "%.1f", value)
+
+private fun yesNo(value: Boolean): String = if (value) "sim" else "não"
 
 private fun displayName(context: Context, uri: Uri): String {
     context.contentResolver.query(

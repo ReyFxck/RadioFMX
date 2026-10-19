@@ -1,8 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Intentionally no INTERNET permission: milestone 1 is offline-first. -->
+    <!-- Still intentionally no INTERNET permission. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <queries>
+        <package android:name="com.caf.fmradio" />
         <package android:name="com.android.fmradio" />
         <package android:name="com.mediatek.fmradio" />
         <package android:name="com.sec.android.app.fm" />

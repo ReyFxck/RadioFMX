@@ -4,15 +4,9 @@ import android.content.Context
 import android.content.Intent
 import kotlin.math.roundToInt
 
-/**
- * Best-effort bridge to an OEM FM application.
- *
- * Android has no public universal FM tuner API for normal third-party apps. When a vendor FM app
- * exists we can launch it and attach the requested frequency using several harmless extra names
- * commonly used by vendor integrations. An OEM app may ignore these extras.
- */
 object FmRadioBridge {
     private val knownPackages = listOf(
+        "com.caf.fmradio",
         "com.android.fmradio",
         "com.mediatek.fmradio",
         "com.sec.android.app.fm",
