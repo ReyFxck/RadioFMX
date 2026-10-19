@@ -65,10 +65,7 @@ class LineageFmBackend(context: Context) {
         override fun onRadioTextChanged() = callbackEvent("onRadioTextChanged", refreshState = true)
         override fun onAlternateFrequencyChanged() = callbackEvent("onAlternateFrequencyChanged")
         override fun onSignalStrengthChanged() = callbackEvent("onSignalStrengthChanged", refreshState = true)
-        override fun onSearchComplete() {
-            callbackEvent("onSearchComplete", refreshState = true)
-            scanCompletion?.complete(Unit)
-        }
+        override fun onSearchComplete() = callbackEvent("onSearchComplete", refreshState = true)
         override fun onSearchListComplete() {
             DebugLog.i("SCAN", "Callback onSearchListComplete recebido")
             scanCompletion?.complete(Unit)
@@ -332,9 +329,8 @@ class LineageFmBackend(context: Context) {
                 }
 
                 val raw = svc.searchList ?: intArrayOf()
-                val stations = raw.mapNotNull { value ->
-                    value.takeIf { it in 87500..108000 }
-                }.map { it / 1000f }
+                val stations = raw.filter { it in 87500..108000 }
+                    .map { it / 1000f }
                     .distinct()
                     .sorted()
 
