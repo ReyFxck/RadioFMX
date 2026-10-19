@@ -7,6 +7,7 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.IBinder
 import com.caf.fmradio.IFMRadioService
+import com.reyfxck.radiofmx.debug.DebugLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +52,7 @@ class LineageFmBackend(context: Context) {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            DebugLog.i("FM", "Binder conectado ao serviço: ${name.flattenToShortString()}")
             radio = IFMRadioService.Stub.asInterface(binder)
             _state.value = _state.value.copy(
                 available = true,
@@ -61,6 +63,7 @@ class LineageFmBackend(context: Context) {
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
+            DebugLog.w("FM", "Binder desconectado: ${name.flattenToShortString()}")
             radio = null
             bound = false
             _state.value = _state.value.copy(
@@ -76,6 +79,7 @@ class LineageFmBackend(context: Context) {
         }
 
         override fun onNullBinding(name: ComponentName) {
+            DebugLog.e("FM", "O serviço recusou o binding: ${name.flattenToShortString()}")
             radio = null
             bound = false
             _state.value = _state.value.copy(
@@ -89,11 +93,17 @@ class LineageFmBackend(context: Context) {
     fun connect() {
         val installed = isInstalled()
         _state.value = _state.value.copy(available = installed)
-        if (!installed || bound) return
+        DebugLog.i("FM", "Pacote $PACKAGE instalado=$installed; binding ativo=$bound")
+        if (!installed) {
+            DebugLog.w("FM", "Backend CAF não encontrado nesta ROM")
+            return
+        }
+        if (bound) return
 
         try {
             val intent = Intent().setClassName(PACKAGE, SERVICE)
             bound = appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            DebugLog.i("FM", "bindService($SERVICE) retornou $bound")
             if (!bound) {
                 _state.value = _state.value.copy(
                     lastError = "Não foi possível vincular ao serviço $SERVICE."
@@ -140,10 +150,12 @@ class LineageFmBackend(context: Context) {
     }
 
     fun setPower(on: Boolean, frequencyMhz: Float) {
+        DebugLog.i("FM", "Pedido Power=$on, frequência=${"%.1f".format(frequencyMhz)} MHz")
         scope.launch {
             val svc = radio ?: return@launch setError("Backend Lineage/CAF ainda não conectado.")
             try {
                 val ok = if (on) svc.fmOn() else svc.fmOff()
+                DebugLog.i("FM", "Comando ${if (on) "fmOn" else "fmOff"} retornou $ok")
                 if (ok && on) {
                     delay(120)
                     svc.tune((frequencyMhz * 1000f).roundToInt())
@@ -158,6 +170,7 @@ class LineageFmBackend(context: Context) {
     }
 
     fun tune(frequencyMhz: Float) {
+        DebugLog.i("FM", "Pedido de sintonia: ${"%.1f".format(frequencyMhz)} MHz")
         scope.launch {
             val svc = radio ?: return@launch setError("Backend Lineage/CAF ainda não conectado.")
             try {
@@ -168,6 +181,7 @@ class LineageFmBackend(context: Context) {
                     delay(120)
                 }
                 val ok = svc.tune((frequencyMhz * 1000f).roundToInt())
+                DebugLog.i("FM", "tune(${(frequencyMhz * 1000f).roundToInt()}) retornou $ok")
                 delay(100)
                 refresh()
                 if (!ok) setError("O tuner rejeitou ${"%.1f".format(frequencyMhz)} MHz.")
@@ -195,6 +209,7 @@ class LineageFmBackend(context: Context) {
     }
 
     fun setSpeaker(enabled: Boolean) {
+        DebugLog.i("AUDIO", "Pedido de alto-falante FM=$enabled")
         scope.launch {
             val svc = radio ?: return@launch setError("Controle de alto-falante exige o backend Lineage/CAF.")
             try {
@@ -208,7 +223,11 @@ class LineageFmBackend(context: Context) {
     }
 
     fun scan() {
-        if (scanJob?.isActive == true) return
+        if (scanJob?.isActive == true) {
+            DebugLog.w("SCAN", "Scan ignorado: já existe uma busca em andamento")
+            return
+        }
+        DebugLog.i("SCAN", "Iniciando busca física de até 12 estações")
         scanJob = scope.launch {
             val svc = radio ?: return@launch setError("Scan físico exige o backend Lineage/CAF.")
             try {
@@ -221,6 +240,7 @@ class LineageFmBackend(context: Context) {
                 }
 
                 val started = svc.searchStrongStationList(12)
+                DebugLog.i("SCAN", "searchStrongStationList(12) retornou $started")
                 if (!started) {
                     return@launch setError("O tuner não iniciou a busca de estações.")
                 }
@@ -240,6 +260,7 @@ class LineageFmBackend(context: Context) {
                     .distinct()
                     .sorted()
 
+                DebugLog.i("SCAN", "Busca concluída; estações válidas=${stations.size}: ${stations.joinToString { "%.1f".format(it) }} MHz")
                 _state.value = _state.value.copy(
                     scanning = false,
                     stations = stations,
@@ -256,6 +277,7 @@ class LineageFmBackend(context: Context) {
     }
 
     fun cancelScan() {
+        DebugLog.w("SCAN", "Cancelamento de scan solicitado")
         scanJob?.cancel()
         scanJob = null
         scope.launch {
@@ -273,10 +295,15 @@ class LineageFmBackend(context: Context) {
     }
 
     private fun setError(message: String) {
+        DebugLog.e("FM", message)
         _state.value = _state.value.copy(lastError = message, scanning = false)
     }
 
     private fun setError(t: Throwable) {
-        setError("${t.javaClass.simpleName}: ${t.message ?: "erro FM"}")
+        DebugLog.e("FM", "Exceção no backend FM", t)
+        _state.value = _state.value.copy(
+            lastError = "${t.javaClass.simpleName}: ${t.message ?: "erro FM"}",
+            scanning = false,
+        )
     }
 }

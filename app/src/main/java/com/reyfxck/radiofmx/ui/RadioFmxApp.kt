@@ -1,5 +1,7 @@
 package com.reyfxck.radiofmx.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
@@ -31,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -38,6 +41,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BugReport
@@ -66,6 +71,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -100,6 +106,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -112,6 +119,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.reyfxck.radiofmx.audio.AudioRoute
 import com.reyfxck.radiofmx.audio.detectAudioRoute
+import com.reyfxck.radiofmx.debug.DebugLog
+import com.reyfxck.radiofmx.debug.DebugLogEntry
 import com.reyfxck.radiofmx.fm.FmRadioBridge
 import com.reyfxck.radiofmx.fm.LineageFmBackend
 import com.reyfxck.radiofmx.fm.LineageFmState
@@ -123,7 +132,6 @@ import kotlin.math.roundToInt
 
 private const val MinFm = 87.5f
 private const val MaxFm = 108.0f
-private const val BandSteps = 205
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -136,8 +144,6 @@ fun RadioFmxApp() {
     var leftDrawerOpen by rememberSaveable { mutableStateOf(false) }
     var rightDrawerOpen by rememberSaveable { mutableStateOf(false) }
 
-    var uiPoweredOn by rememberSaveable { mutableStateOf(prefs.getBoolean("powered_on", false)) }
-    var simulatedScanning by rememberSaveable { mutableStateOf(false) }
     var frequency by rememberSaveable {
         mutableFloatStateOf(prefs.getFloat("frequency", 95.1f).coerceIn(MinFm, MaxFm))
     }
@@ -180,6 +186,11 @@ fun RadioFmxApp() {
 
     val lineageBackend = remember { LineageFmBackend(context) }
     val fmState by lineageBackend.state.collectAsState()
+    val logs by DebugLog.entries.collectAsState()
+
+    LaunchedEffect(Unit) {
+        DebugLog.i("APP", "RadioFMX 0.4.0 iniciado")
+    }
 
     DisposableEffect(lineageBackend) {
         lineageBackend.connect()
@@ -193,31 +204,8 @@ fun RadioFmxApp() {
         }
     }
 
-    val poweredOn = if (fmState.connected) fmState.powered else uiPoweredOn
-    val scanning = if (fmState.connected) fmState.scanning else simulatedScanning
-
-    LaunchedEffect(uiPoweredOn) {
-        prefs.edit().putBoolean("powered_on", uiPoweredOn).apply()
-    }
-
-    LaunchedEffect(simulatedScanning) {
-        if (!simulatedScanning || fmState.connected) return@LaunchedEffect
-
-        val start = frequency
-        var cursor = MinFm
-        repeat(BandSteps + 1) {
-            if (!simulatedScanning || fmState.connected) return@LaunchedEffect
-            frequency = quantize(cursor)
-            cursor += 0.1f
-            delay(42)
-        }
-
-        setFrequency(start)
-        simulatedScanning = false
-        snackbar.showSnackbar(
-            "Varredura terminou. Sem backend FM acessível, não dá para medir sinal real."
-        )
-    }
+    val poweredOn = fmState.connected && fmState.powered
+    val scanning = fmState.connected && fmState.scanning
 
     val audioManager = remember {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -230,8 +218,10 @@ fun RadioFmxApp() {
 
     fun setVolume(value: Int) {
         val safe = value.coerceIn(0, maxVolume)
+        val before = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, safe, 0)
         volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (before != volume) DebugLog.i("AUDIO", "Volume STREAM_MUSIC: $before -> $volume / $maxVolume")
     }
 
     LaunchedEffect(audioManager) {
@@ -240,7 +230,10 @@ fun RadioFmxApp() {
             if (systemVolume != volume) volume = systemVolume
 
             val currentRoute = detectAudioRoute(audioManager)
-            if (currentRoute != audioRoute) audioRoute = currentRoute
+            if (currentRoute != audioRoute) {
+                DebugLog.i("AUDIO", "Rota de áudio: ${audioRoute.label} -> ${currentRoute.label}")
+                audioRoute = currentRoute
+            }
 
             delay(180)
         }
@@ -286,10 +279,6 @@ fun RadioFmxApp() {
         }
     }
 
-    LaunchedEffect(poweredOn) {
-        if (!poweredOn) player.pause()
-    }
-
     val openAudio = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -309,10 +298,11 @@ fun RadioFmxApp() {
     }
 
     fun tuneTo(value: Float) {
-        simulatedScanning = false
         setFrequency(value)
         if (fmState.connected && poweredOn) {
             lineageBackend.tune(frequency)
+        } else {
+            DebugLog.w("FM", "Frequência selecionada na interface, mas não enviada: tuner não conectado/ligado")
         }
     }
 
@@ -354,8 +344,10 @@ fun RadioFmxApp() {
                         if (fmState.connected) {
                             lineageBackend.setPower(!fmState.powered, frequency)
                         } else {
-                            uiPoweredOn = !uiPoweredOn
-                            if (!uiPoweredOn) simulatedScanning = false
+                            DebugLog.e("FM", "Power solicitado, mas o acesso ao tuner físico não está conectado")
+                            scope.launch {
+                                snackbar.showSnackbar("Tuner FM físico não conectado. Abra Manutenção → Terminal de logs.")
+                            }
                         }
                     },
                     onFrequencyChange = { setFrequency(it, persist = false) },
@@ -373,7 +365,10 @@ fun RadioFmxApp() {
                         if (fmState.connected) {
                             if (fmState.scanning) lineageBackend.cancelScan() else lineageBackend.scan()
                         } else {
-                            simulatedScanning = !simulatedScanning
+                            DebugLog.e("SCAN", "Scan solicitado, mas nenhum acesso ao tuner físico está conectado; busca não executada")
+                            scope.launch {
+                                snackbar.showSnackbar("Scan físico indisponível: o acesso ao tuner ainda não conectou.")
+                            }
                         }
                     },
                     onFavorite = { toggleFavorite(frequency) },
@@ -422,30 +417,13 @@ fun RadioFmxApp() {
                     },
                 )
 
-                FmBackendCard(
-                    fmState = fmState,
-                    packageName = oemFmPackage,
-                    frequency = frequency,
-                    onReconnect = { lineageBackend.connect() },
-                    onOpen = {
-                        if (!FmRadioBridge.launch(context, frequency)) {
-                            scope.launch {
-                                snackbar.showSnackbar(
-                                    "Nenhum app FM compatível pôde ser aberto."
-                                )
-                            }
-                        }
-                    },
-                )
-
                 LocalAudioCard(
                     title = localTitle,
                     isPlaying = isPlaying,
                     hasAudio = localUri != null,
-                    poweredOn = poweredOn,
                     onChoose = { openAudio.launch(arrayOf("audio/*")) },
                     onPlayPause = {
-                        if (player.mediaItemCount == 0 || !poweredOn) return@LocalAudioCard
+                        if (player.mediaItemCount == 0) return@LocalAudioCard
                         if (player.isPlaying) player.pause() else player.play()
                     },
                 )
@@ -465,9 +443,9 @@ fun RadioFmxApp() {
                             Text("Offline de verdade", fontWeight = FontWeight.Bold)
                             Text(
                                 if (fmState.connected) {
-                                    "Backend Lineage/CAF conectado: power, tune, scan e speaker podem controlar o tuner físico."
+                                    "Acesso ao receptor FM ativo: Power, sintonia, busca e alto-falante podem controlar o chip físico."
                                 } else {
-                                    "Sem INTERNET. Arraste da esquerda para canais e da direita para manutenção."
+                                    "Sem internet. O acesso ao chip FM depende do tuner da ROM; veja o diagnóstico no painel da direita."
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -558,6 +536,13 @@ fun RadioFmxApp() {
                 onRefresh = { lineageBackend.refresh() },
                 onReconnect = { lineageBackend.connect() },
                 onOpenFm = { FmRadioBridge.launch(context, frequency) },
+                logs = logs,
+                onCopyLogs = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("RadioFMX logs", DebugLog.dump()))
+                    scope.launch { snackbar.showSnackbar("Logs do RadioFMX copiados para a área de transferência.") }
+                },
+                onClearLogs = { DebugLog.clear() },
                 onClose = { rightDrawerOpen = false },
             )
         }
@@ -710,7 +695,7 @@ private fun FrequencyCard(
                         when {
                             scanning -> "PROCURANDO..."
                             poweredOn && hardwareBackend -> "ON AIR • TUNER"
-                            poweredOn -> "ON AIR • UI"
+                            !hardwareBackend -> "TUNER INDISPONÍVEL"
                             else -> "DESLIGADO"
                         },
                         color = if (poweredOn) {
@@ -802,7 +787,6 @@ private fun FrequencyCard(
 
                 Button(
                     onClick = onScan,
-                    enabled = poweredOn,
                     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
                 ) {
                     Icon(Icons.Rounded.Search, contentDescription = null)
@@ -824,7 +808,7 @@ private fun FrequencyCard(
                 text = if (hardwareBackend) {
                     "A frequência selecionada é enviada ao tuner físico."
                 } else {
-                    "Ligue o receiver e selecione a frequência. O hardware depende do backend da ROM."
+                    "Sem acesso ao tuner físico: a frequência não está sendo transmitida."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -981,56 +965,10 @@ private fun VolumeCard(
 }
 
 @Composable
-private fun FmBackendCard(
-    fmState: LineageFmState,
-    packageName: String?,
-    frequency: Float,
-    onReconnect: () -> Unit,
-    onOpen: () -> Unit,
-) {
-    val subtitle = when {
-        fmState.connected ->
-            "Lineage/CAF conectado. Controle direto de power, sintonia, scan e speaker disponível."
-        fmState.available ->
-            "A rádio Lineage/CAF foi encontrada, mas o serviço ainda não conectou."
-        packageName != null ->
-            "App FM detectado: $packageName. Sem Binder conhecido, o RadioFMX pode abrir o app da ROM."
-        else ->
-            "Nenhum backend FM conhecido foi detectado neste momento."
-    }
-
-    InfoCard(
-        icon = Icons.Rounded.Radio,
-        title = "Tuner FM físico",
-        subtitle = subtitle,
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = onReconnect) {
-                Icon(Icons.Rounded.Refresh, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("Reconectar")
-            }
-            Button(
-                onClick = onOpen,
-                enabled = packageName != null,
-            ) {
-                Icon(Icons.Rounded.OpenInNew, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("${formatFrequency(frequency)}")
-            }
-        }
-    }
-}
-
-@Composable
 private fun LocalAudioCard(
     title: String?,
     isPlaying: Boolean,
     hasAudio: Boolean,
-    poweredOn: Boolean,
     onChoose: () -> Unit,
     onPlayPause: () -> Unit,
 ) {
@@ -1051,7 +989,7 @@ private fun LocalAudioCard(
             }
             Button(
                 onClick = onPlayPause,
-                enabled = hasAudio && poweredOn,
+                enabled = hasAudio,
             ) {
                 Icon(
                     if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
@@ -1214,9 +1152,12 @@ private fun DebugDrawer(
     volume: Int,
     maxVolume: Int,
     currentFrequency: Float,
+    logs: List<DebugLogEntry>,
     onRefresh: () -> Unit,
     onReconnect: () -> Unit,
     onOpenFm: () -> Unit,
+    onCopyLogs: () -> Unit,
+    onClearLogs: () -> Unit,
     onClose: () -> Unit,
 ) {
     var closeDrag by remember { mutableFloatStateOf(0f) }
@@ -1254,7 +1195,7 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.3.0")
+            DebugValue("RadioFMX", "0.4.0")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
@@ -1293,7 +1234,7 @@ private fun DebugDrawer(
                 Text("Atualizar diagnóstico")
             }
             OutlinedButton(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) {
-                Text("Reconectar backend FM")
+                Text("Reconectar acesso ao tuner")
             }
             Button(
                 onClick = onOpenFm,
@@ -1302,8 +1243,115 @@ private fun DebugDrawer(
             ) {
                 Icon(Icons.Rounded.OpenInNew, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Abrir rádio da ROM")
+                Text("Abrir app FM original (teste)")
             }
+
+            LogTerminal(
+                entries = logs,
+                onCopy = onCopyLogs,
+                onClear = onClearLogs,
+            )
+        }
+    }
+}
+
+
+@Composable
+private fun LogTerminal(
+    entries: List<DebugLogEntry>,
+    onCopy: () -> Unit,
+    onClear: () -> Unit,
+) {
+    var errorsOnly by rememberSaveable { mutableStateOf(false) }
+    val visibleEntries = remember(entries, errorsOnly) {
+        entries.filter { !errorsOnly || it.level == "E" || it.level == "W" }
+            .takeLast(120)
+            .asReversed()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Terminal de logs", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Eventos internos do RadioFMX • ${entries.size} registros",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                FilterChip(
+                    selected = errorsOnly,
+                    onClick = { errorsOnly = !errorsOnly },
+                    label = { Text(if (errorsOnly) "Só erros" else "Todos") },
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onCopy, modifier = Modifier.weight(1f)) {
+                    Text("Copiar logs")
+                }
+                OutlinedButton(onClick = onClear, modifier = Modifier.weight(1f)) {
+                    Text("Limpar")
+                }
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF0B1010),
+            ) {
+                if (visibleEntries.isEmpty()) {
+                    Text(
+                        text = "> aguardando eventos...",
+                        modifier = Modifier.padding(12.dp),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = Color(0xFF9FE6B8),
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 84.dp, max = 280.dp),
+                    ) {
+                        items(visibleEntries, key = { it.id }) { entry ->
+                            Text(
+                                text = entry.asLine(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = when (entry.level) {
+                                    "E" -> Color(0xFFFF8A80)
+                                    "W" -> Color(0xFFFFD180)
+                                    "D" -> Color(0xFF9ECAE1)
+                                    else -> Color(0xFFB9F6CA)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            Text(
+                "Os registros são do próprio RadioFMX; o Android não permite que um app comum leia todo o logcat de outros processos. Os 600 eventos mais recentes ficam na memória desta sessão.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
