@@ -2,14 +2,14 @@ package com.reyfxck.radiofmx.fm
 
 import android.content.Context
 import android.content.Intent
+import kotlin.math.roundToInt
 
 /**
  * Best-effort bridge to an OEM FM application.
  *
- * Android phones do not expose one public, universal API that ordinary third-party apps can use
- * to control an integrated FM tuner. Vendors that ship FM support normally keep it behind their
- * own application/system integration. RadioFMX therefore detects a few common vendor package
- * names and launches the vendor app when one is available.
+ * Android has no public universal FM tuner API for normal third-party apps. When a vendor FM app
+ * exists we can launch it and attach the requested frequency using several harmless extra names
+ * commonly used by vendor integrations. An OEM app may ignore these extras.
  */
 object FmRadioBridge {
     private val knownPackages = listOf(
@@ -28,9 +28,16 @@ object FmRadioBridge {
             context.packageManager.getLaunchIntentForPackage(packageName) != null
         }
 
-    fun launch(context: Context): Boolean {
+    fun launch(context: Context, frequencyMhz: Float? = null): Boolean {
         val packageName = findAvailablePackage(context) ?: return false
         val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+
+        if (frequencyMhz != null) {
+            intent.putExtra("frequency", frequencyMhz)
+            intent.putExtra("frequency_mhz", frequencyMhz)
+            intent.putExtra("freq", (frequencyMhz * 1000f).roundToInt())
+        }
+
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         return true

@@ -1,17 +1,23 @@
 # RadioFMX
 
-RadioFMX is an offline-first Android radio experiment built with Kotlin, Jetpack Compose and Material 3 Expressive.
+RadioFMX is an offline-first Android radio experiment built with Kotlin, Jetpack Compose, Media3 and Material 3 Expressive.
 
-## First milestone
+## v0.2.0
 
 - Android 17 / API 37 target
-- Material 3 Expressive UI
+- Orange-first Material 3 Expressive visual identity
+- Receiver power button and powered/off visual states
+- Animated ON AIR / scanning signal bars
+- 87.5–108.0 MHz tuning in 0.1 MHz steps
+- Band scan animation and saved channel presets
+- System media volume slider plus volume up/down controls
+- Live audio-route indicator for wired headphones, USB, Bluetooth and speaker
+- Media3 local audio playback with media audio attributes, audio focus handling and noisy-route handling
+- Best-effort handoff of the selected frequency to an OEM FM Radio app when available
 - No INTERNET permission
-- Offline local-audio playback
-- FM-style tuning UI and saved presets
-- Best-effort bridge to an OEM FM Radio app when the device exposes one
-- GitHub Actions debug APK builds
 
-> Android does not expose a universal public FM tuner API to ordinary third-party phone apps. Real over-the-air FM tuning therefore depends on the device vendor, its FM hardware, and any vendor app/API exposed on that device.
+## FM hardware limitation
 
-Online radio is intentionally out of scope for the first milestone and can be added later as an optional module.
+Android does not expose one universal public FM tuner API to ordinary third-party phone apps. RadioFMX can implement the tuner UI, band logic, presets and OEM handoff, but automatic signal detection and direct chip control require a vendor-specific tuner backend. If the device exposes no compatible FM app/API, the physical tuner cannot be controlled from a normal app.
+
+Online radio remains intentionally optional and is not enabled in v0.2.0.

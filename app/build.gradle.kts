@@ -11,8 +11,8 @@ android {
         applicationId = "com.reyfxck.radiofmx"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildFeatures {
@@ -24,7 +24,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
-
 
 dependencies {
     implementation("androidx.core:core-ktx:1.19.1")
@@ -38,7 +37,6 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Material 3 Expressive theming became a first-class API in 1.5.0-beta01.
     implementation("androidx.compose.material3:material3:1.5.0-beta01")
 
     implementation("androidx.media3:media3-exoplayer:1.11.0")
