@@ -1212,7 +1212,7 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.5.0")
+            DebugValue("RadioFMX", "0.5.1-test")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
