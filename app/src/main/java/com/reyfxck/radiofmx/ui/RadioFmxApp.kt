@@ -342,7 +342,15 @@ fun RadioFmxApp() {
                     isFavorite = favorites.any { abs(it - frequency) < 0.05f },
                     onPower = {
                         if (fmState.connected) {
-                            lineageBackend.setPower(!fmState.powered, frequency)
+                            val turningOn = !fmState.powered
+                            if (turningOn) {
+                                scope.launch {
+                                    snackbar.showSnackbar(
+                                        "A ROM exige inicializar o tuner pela interface FM original. Ela será aberta; ligue o rádio lá e volte ao RadioFMX."
+                                    )
+                                }
+                            }
+                            lineageBackend.setPower(turningOn, frequency)
                         } else {
                             DebugLog.e("FM", "Power solicitado, mas o acesso ao tuner físico não está conectado")
                             scope.launch {
@@ -363,7 +371,16 @@ fun RadioFmxApp() {
                     },
                     onScan = {
                         if (fmState.connected) {
-                            if (fmState.scanning) lineageBackend.cancelScan() else lineageBackend.scan()
+                            if (fmState.scanning) {
+                                lineageBackend.cancelScan()
+                            } else if (!fmState.powered) {
+                                DebugLog.w("SCAN", "Scan bloqueado: ligue primeiro o tuner físico pelo botão Power")
+                                scope.launch {
+                                    snackbar.showSnackbar("Ligue primeiro o rádio pelo Power; depois o SCAN poderá procurar estações reais.")
+                                }
+                            } else {
+                                lineageBackend.scan()
+                            }
                         } else {
                             DebugLog.e("SCAN", "Scan solicitado, mas nenhum acesso ao tuner físico está conectado; busca não executada")
                             scope.launch {
@@ -1195,7 +1212,7 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.4.0")
+            DebugValue("RadioFMX", "0.5.0")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")

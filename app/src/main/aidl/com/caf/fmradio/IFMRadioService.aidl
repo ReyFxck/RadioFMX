@@ -1,7 +1,3 @@
-/*
- * Interface mirrored from the exported Qualcomm/CAF FMRadio service used by LineageOS.
- * Method order intentionally matches upstream because it defines Binder transaction IDs.
- */
 package com.caf.fmradio;
 
 import com.caf.fmradio.IFMRadioServiceCallbacks;
@@ -29,6 +25,7 @@ interface IFMRadioService
     boolean scan(int pty);
     boolean seekPI(int piCode);
     boolean searchStrongStationList(int numStations);
+    int[]   getSearchList();
     boolean cancelSearch();
     String getProgramService();
     String getRadioText();
@@ -79,11 +76,9 @@ interface IFMRadioService
     boolean isSSRInProgress();
     boolean isRtPlusSupported();
     boolean isA2DPConnected();
-    boolean isSearchInProgress();
-    List getScannedFrequencies();
     boolean getIntfDetLowTh();
     boolean getIntfDetHighTh();
     boolean getRxRepeatCount();
-    boolean getFmStatsProp();
     void restoreDefaults();
 }
+

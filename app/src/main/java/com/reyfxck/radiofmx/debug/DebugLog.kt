@@ -31,7 +31,9 @@ object DebugLog {
     @Synchronized
     private fun record(level: String, tag: String, message: String, error: Throwable? = null) {
         val detail = if (error == null) message else {
-            "$message | ${error.javaClass.simpleName}: ${error.message ?: "sem mensagem"}"
+            val summary = "$message | ${error.javaClass.simpleName}: ${error.message ?: "sem mensagem"}"
+            val stack = error.stackTraceToString().lineSequence().take(28).joinToString("\n")
+            "$summary\n$stack"
         }
         val entry = DebugLogEntry(
             id = ++nextId,
