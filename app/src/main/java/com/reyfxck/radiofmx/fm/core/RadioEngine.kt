@@ -97,11 +97,19 @@ class RadioEngine(context: Context) {
                             "ENGINE",
                             "${selected.name} falhou ao ligar; tentando próximo backend automaticamente."
                         )
-                        val fallback = chooseAvailableBackend(excluding = setOf(selected.id))
+                        val fallback = chooseAvailableBackend(
+                            excluding = setOf(selected.id),
+                            allowExternalBootstrap = false,
+                        )
                         if (fallback != null) {
                             activate(fallback)
                             delay(350)
                             fallback.setPower(true, frequencyMhz)
+                        } else {
+                            DebugLog.w(
+                                "ENGINE",
+                                "Nenhum backend interno restante consegue ligar o tuner sem bootstrap externo."
+                            )
                         }
                         return@launch
                     }
@@ -160,10 +168,14 @@ class RadioEngine(context: Context) {
         activate(selected)
     }
 
-    private fun chooseAvailableBackend(excluding: Set<String> = emptySet()): FmBackend? {
+    private fun chooseAvailableBackend(
+        excluding: Set<String> = emptySet(),
+        allowExternalBootstrap: Boolean = true,
+    ): FmBackend? {
         val probeMap = mutableProbes.value.associateBy { it.id }
         return backends
             .filterNot { it.id in excluding }
+            .filter { allowExternalBootstrap || !it.capabilities.requiresOemBootstrap }
             .firstOrNull { probeMap[it.id]?.health == BackendHealth.AVAILABLE }
     }
 

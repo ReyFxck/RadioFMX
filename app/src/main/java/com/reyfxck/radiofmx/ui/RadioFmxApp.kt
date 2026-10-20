@@ -191,7 +191,7 @@ fun RadioFmxApp() {
     val logs by DebugLog.entries.collectAsState()
 
     LaunchedEffect(Unit) {
-        DebugLog.i("APP", "RadioFMX 0.7.0-test iniciado")
+        DebugLog.i("APP", "RadioFMX 0.7.1-test iniciado")
     }
 
     DisposableEffect(radioEngine) {
@@ -1214,7 +1214,7 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.7.0-test")
+            DebugValue("RadioFMX", "0.7.1-test")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
@@ -1287,7 +1287,7 @@ private fun DebugDrawer(
             ) {
                 Icon(Icons.Rounded.OpenInNew, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Abrir app FM original (teste)")
+                Text("Abrir app FM OEM manualmente (diagnóstico)")
             }
 
             LogTerminal(

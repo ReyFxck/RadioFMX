@@ -11,8 +11,8 @@ android {
         applicationId = "com.reyfxck.radiofmx"
         minSdk = 26
         targetSdk = 37
-        versionCode = 8
-        versionName = "0.7.0"
+        versionCode = 9
+        versionName = "0.7.1"
     }
 
     buildTypes {

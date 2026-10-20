@@ -238,7 +238,7 @@ class CafBinderBackend(context: Context) : FmBackend {
             val svc = radio ?: return@launch setError("Serviço FM da ROM ainda não conectado.")
             try {
                 if (on) {
-                    if (!ensurePowered(svc, frequencyMhz)) return@launch
+                    if (!ensurePowered(svc)) return@launch
                     tuneOnService(svc, frequencyMhz)
                 } else {
                     if (!svc.isFmOn) {
@@ -248,14 +248,14 @@ class CafBinderBackend(context: Context) : FmBackend {
                     val ok = try {
                         svc.fmOff()
                     } catch (t: Throwable) {
-                        DebugLog.e("FM", "fmOff remoto falhou; abrindo a interface original da ROM", t)
-                        val launched = runCatching { FmRadioBridge.launch(appContext, frequencyMhz) }.getOrDefault(false)
+                        DebugLog.e(
+                            "FM",
+                            "fmOff remoto falhou. O RadioFMX não abrirá apps externos automaticamente.",
+                            t,
+                        )
                         return@launch setError(
-                            if (launched) {
-                                "A ROM recusou desligar o tuner por Binder. Desligue-o no app FM original e volte ao RadioFMX."
-                            } else {
-                                "Falha ao desligar o tuner: ${t.javaClass.simpleName}: ${t.message ?: "erro FM"}"
-                            }
+                            "Falha ao desligar o tuner pelo backend CAF: " +
+                                "${t.javaClass.simpleName}: ${t.message ?: "erro FM"}"
                         )
                     }
                     DebugLog.i("FM", "Comando fmOff retornou $ok")
@@ -417,36 +417,19 @@ class CafBinderBackend(context: Context) : FmBackend {
         }
     }
 
-    private suspend fun ensurePowered(svc: IFMRadioService, frequencyMhz: Float): Boolean {
+    private suspend fun ensurePowered(svc: IFMRadioService): Boolean {
         if (svc.isFmOn) return true
 
         DebugLog.w(
             "FM",
-            "Não chamarei fmOn() por Binder remoto: esta implementação da ROM exige inicialização pela própria interface FM."
+            "CAF está conectado, mas o tuner está desligado. " +
+                "Power externo/OEM desativado por design: o RadioFMX não abrirá outro app."
         )
-        val launched = try {
-            FmRadioBridge.launch(appContext, frequencyMhz)
-        } catch (t: Throwable) {
-            DebugLog.e("FM", "Falha ao abrir o app FM original", t)
-            false
-        }
-        if (!launched) {
-            setError("O tuner está desligado e não foi possível abrir o app FM original da ROM.")
-            return false
-        }
-
-        DebugLog.i(
-            "FM",
-            "App FM original aberto. Aguardando até 30 s para o usuário/ROM ligar o tuner pela interface nativa."
+        setError(
+            "O backend CAF não consegue inicializar este tuner diretamente nesta ROM. " +
+                "O RadioFMX não abrirá outro aplicativo automaticamente."
         )
-        if (!waitForPowerState(svc, desired = true, timeoutMs = 30_000)) {
-            setError(
-                "O app FM da ROM foi aberto, mas o tuner continua desligado. Ligue o rádio no app original e volte ao RadioFMX."
-            )
-            return false
-        }
-        DebugLog.i("FM", "Tuner físico confirmado ligado; retomando o comando no RadioFMX")
-        return true
+        return false
     }
 
     private suspend fun waitForPowerState(
