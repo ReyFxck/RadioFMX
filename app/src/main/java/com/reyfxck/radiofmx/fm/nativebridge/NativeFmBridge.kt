@@ -50,6 +50,7 @@ object NativeFmBridge {
 
     external fun nativeProbe(): String
     external fun nativeQcomAidlProbe(): String
+    external fun nativeQcomHidlProbe(): String
     external fun nativeQcomAidlBinder(): IBinder?
     external fun nativeMarkVintfStability(binder: IBinder): Boolean
     external fun nativeOpen(path: String): Long

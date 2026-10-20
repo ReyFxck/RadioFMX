@@ -332,6 +332,90 @@ Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeQcomAidlProbe(
     return toJString(env, result);
 }
 
+std::string throwableText(JNIEnv* env, jthrowable throwable) {
+    if (!throwable) return "exceção desconhecida";
+
+    jclass throwableClass = env->FindClass("java/lang/Throwable");
+    if (!throwableClass) {
+        env->ExceptionClear();
+        return "Throwable";
+    }
+    jmethodID toString = env->GetMethodID(
+        throwableClass, "toString", "()Ljava/lang/String;");
+    if (!toString) {
+        env->ExceptionClear();
+        return "Throwable";
+    }
+    auto text = static_cast<jstring>(env->CallObjectMethod(throwable, toString));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return "Throwable";
+    }
+    if (!text) return "Throwable";
+
+    const char* utf = env->GetStringUTFChars(text, nullptr);
+    if (!utf) return "Throwable";
+    std::string result(utf);
+    env->ReleaseStringUTFChars(text, utf);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeQcomHidlProbe(
+    JNIEnv* env,
+    jobject
+) {
+    constexpr const char* kIface = "vendor.qti.hardware.fm@1.0::IFmHci";
+
+    jclass hwBinder = env->FindClass("android/os/HwBinder");
+    if (env->ExceptionCheck() || !hwBinder) {
+        jthrowable error = env->ExceptionOccurred();
+        env->ExceptionClear();
+        return toJString(
+            env,
+            std::string("BLOCKED|android.os.HwBinder indisponível: ") +
+                throwableText(env, error));
+    }
+
+    jmethodID getService = env->GetStaticMethodID(
+        hwBinder,
+        "getService",
+        "(Ljava/lang/String;Ljava/lang/String;Z)Landroid/os/IHwBinder;");
+    if (env->ExceptionCheck() || !getService) {
+        jthrowable error = env->ExceptionOccurred();
+        env->ExceptionClear();
+        return toJString(
+            env,
+            std::string("BLOCKED|HwBinder.getService oculto/bloqueado: ") +
+                throwableText(env, error));
+    }
+
+    jstring iface = env->NewStringUTF(kIface);
+    jstring instance = env->NewStringUTF("default");
+    jobject service = env->CallStaticObjectMethod(
+        hwBinder, getService, iface, instance, JNI_FALSE);
+
+    if (env->ExceptionCheck()) {
+        jthrowable error = env->ExceptionOccurred();
+        env->ExceptionClear();
+        return toJString(
+            env,
+            std::string("BLOCKED|HIDL FM não acessível ao APK: ") +
+                throwableText(env, error));
+    }
+
+    if (!service) {
+        return toJString(
+            env,
+            std::string("MISSING|") + kIface + "/default não encontrado");
+    }
+
+    return toJString(
+        env,
+        std::string("OK|") + kIface +
+            "/default encontrado via HwBinder");
+}
+
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeQcomAidlBinder(
     JNIEnv* env,

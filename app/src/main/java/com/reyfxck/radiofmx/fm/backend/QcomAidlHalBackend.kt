@@ -96,6 +96,13 @@ class QcomAidlHalBackend : FmBackend {
             else -> BackendHealth.ERROR
         }
 
+        val hidlProbe = if (status != "OK") {
+            runCatching { NativeFmBridge.nativeQcomHidlProbe() }
+                .getOrElse { "ERROR|${it.javaClass.simpleName}: ${it.message}" }
+        } else {
+            null
+        }
+
         return BackendProbe(
             id = id,
             name = name,
@@ -112,7 +119,10 @@ class QcomAidlHalBackend : FmBackend {
                 else ->
                     "Não foi possível consultar o HAL FM Qualcomm AIDL"
             },
-            details = details,
+            details = buildList {
+                addAll(details)
+                hidlProbe?.let { add("HIDL probe: $it") }
+            },
         )
     }
 

@@ -12,6 +12,12 @@ RadioFMX no longer treats a ROM-specific radio app as the product. The app has a
 
 The engine probes all supported backends, ranks them, selects the best available one, and can automatically fall back when direct V4L2 access opens but cannot initialize the vendor driver.
 
+## v0.8.1
+
+- Adds a Qualcomm HIDL availability/security probe when AIDL is unavailable.
+- Keeps HIDL diagnostic-only until the device proves an untrusted APK may access that HAL.
+- Avoids unsafe global media-key tricks and still never launches another radio app from Power.
+
 ## v0.8.0
 
 - Direct Qualcomm stable FM HAL (AIDL) probe/client
