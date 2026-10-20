@@ -73,19 +73,35 @@ class QcomSharedLibraryBackend(context: Context) : FmBackend {
             callbackClass = Class.forName("qcom.fmradio.FmRxEvCallbacksAdaptor")
             configClass = Class.forName("qcom.fmradio.FmConfig")
 
-            BackendProbe(
-                id = id,
-                name = name,
-                kind = kind,
-                priority = priority,
-                health = BackendHealth.AVAILABLE,
-                summary = "Shared library qcom.fmradio visível ao RadioFMX",
-                details = listOf(
-                    "execução no processo do RadioFMX",
-                    "usa libqcomfm_jni/Helium quando o sistema permite",
-                    "sem Binder do app FM",
-                ),
-            )
+            val jniLoad = runCatching { System.loadLibrary("qcomfm_jni") }
+            if (jniLoad.isSuccess) {
+                BackendProbe(
+                    id = id,
+                    name = name,
+                    kind = kind,
+                    priority = priority,
+                    health = BackendHealth.AVAILABLE,
+                    summary = "qcom.fmradio + libqcomfm_jni acessíveis ao RadioFMX",
+                    details = listOf(
+                        "execução no processo do RadioFMX",
+                        "JNI privado carregável neste namespace",
+                    ),
+                )
+            } else {
+                val error = jniLoad.exceptionOrNull()
+                BackendProbe(
+                    id = id,
+                    name = name,
+                    kind = kind,
+                    priority = priority,
+                    health = BackendHealth.BLOCKED,
+                    summary = "qcom.fmradio.jar existe, mas o JNI Qualcomm é bloqueado ao APK",
+                    details = listOf(
+                        error?.let(::errorText) ?: "libqcomfm_jni indisponível",
+                        "não selecionar este backend até o JNI ser realmente carregável",
+                    ),
+                )
+            }
         } catch (t: Throwable) {
             BackendProbe(
                 id = id,

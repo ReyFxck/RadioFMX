@@ -1,6 +1,7 @@
 package com.reyfxck.radiofmx.fm.core
 
 enum class BackendKind {
+    QCOM_AIDL_HAL,
     QCOM_SHARED_LIBRARY,
     NATIVE_V4L2,
     CAF_BINDER,

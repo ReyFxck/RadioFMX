@@ -12,6 +12,15 @@ RadioFMX no longer treats a ROM-specific radio app as the product. The app has a
 
 The engine probes all supported backends, ranks them, selects the best available one, and can automatically fall back when direct V4L2 access opens but cannot initialize the vendor driver.
 
+## v0.8.0
+
+- Direct Qualcomm stable FM HAL (AIDL) probe/client
+- Raw Qualcomm FM HCI power/tune/seek/scan commands when the AIDL HAL is exposed
+- VINTF-stable callback Binder created by RadioFMX
+- qcom.fmradio Java backend is now marked BLOCKED when libqcomfm_jni cannot actually load
+- No automatic launch of OEM/Lineage FM applications
+- Native V4L2 and CAF compatibility backends remain available
+
 ## v0.6.0
 
 - Android 17 / API 37 target

@@ -1,5 +1,6 @@
 package com.reyfxck.radiofmx.fm.nativebridge
 
+import android.os.IBinder
 import com.reyfxck.radiofmx.debug.DebugLog
 
 data class NativeProbeResult(
@@ -48,6 +49,9 @@ object NativeFmBridge {
     }
 
     external fun nativeProbe(): String
+    external fun nativeQcomAidlProbe(): String
+    external fun nativeQcomAidlBinder(): IBinder?
+    external fun nativeMarkVintfStability(binder: IBinder): Boolean
     external fun nativeOpen(path: String): Long
     external fun nativeClose(handle: Long)
     external fun nativeTune(handle: Long, frequencyMhz: Float): Boolean

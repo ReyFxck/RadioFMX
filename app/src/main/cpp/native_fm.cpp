@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <fcntl.h>
+#include <dlfcn.h>
 #include <linux/videodev2.h>
 #include <sstream>
 #include <string>
@@ -87,6 +88,90 @@ std::string probeDevices() {
 
 jstring toJString(JNIEnv* env, const std::string& value) {
     return env->NewStringUTF(value.c_str());
+}
+
+// Keep the Binder NDK dependency optional at load time so RadioFMX still starts
+// on Android releases/devices where this API is unavailable.
+struct BinderNdkApi {
+    void* handle = nullptr;
+    using CheckServiceFn = void* (*)(const char*);
+    using IsDeclaredFn = bool (*)(const char*);
+    using ToJavaBinderFn = jobject (*)(JNIEnv*, void*);
+    using FromJavaBinderFn = void* (*)(JNIEnv*, jobject);
+    using DecStrongFn = void (*)(void*);
+    using MarkVintfFn = void (*)(void*);
+
+    CheckServiceFn checkService = nullptr;
+    IsDeclaredFn isDeclared = nullptr;
+    ToJavaBinderFn toJavaBinder = nullptr;
+    FromJavaBinderFn fromJavaBinder = nullptr;
+    DecStrongFn decStrong = nullptr;
+    MarkVintfFn markVintf = nullptr;
+
+    bool readyForLookup() const {
+        return handle && checkService && toJavaBinder && decStrong;
+    }
+
+    bool readyForMarking() const {
+        return handle && fromJavaBinder && decStrong && markVintf;
+    }
+};
+
+BinderNdkApi& binderNdk() {
+    static BinderNdkApi api = [] {
+        BinderNdkApi result;
+        result.handle = dlopen("libbinder_ndk.so", RTLD_NOW | RTLD_LOCAL);
+        if (!result.handle) {
+            LOGE("dlopen(libbinder_ndk.so) failed: %s", dlerror());
+            return result;
+        }
+
+        result.checkService = reinterpret_cast<BinderNdkApi::CheckServiceFn>(
+            dlsym(result.handle, "AServiceManager_checkService"));
+        result.isDeclared = reinterpret_cast<BinderNdkApi::IsDeclaredFn>(
+            dlsym(result.handle, "AServiceManager_isDeclared"));
+        result.toJavaBinder = reinterpret_cast<BinderNdkApi::ToJavaBinderFn>(
+            dlsym(result.handle, "AIBinder_toJavaBinder"));
+        result.fromJavaBinder = reinterpret_cast<BinderNdkApi::FromJavaBinderFn>(
+            dlsym(result.handle, "AIBinder_fromJavaBinder"));
+        result.decStrong = reinterpret_cast<BinderNdkApi::DecStrongFn>(
+            dlsym(result.handle, "AIBinder_decStrong"));
+        result.markVintf = reinterpret_cast<BinderNdkApi::MarkVintfFn>(
+            dlsym(result.handle, "AIBinder_markVintfStability"));
+
+        return result;
+    }();
+    return api;
+}
+
+constexpr const char* kQcomFmAidlService =
+    "vendor.qti.hardware.fm.IFmHci/default";
+
+std::string probeQcomAidl() {
+    BinderNdkApi& api = binderNdk();
+    if (!api.readyForLookup()) {
+        return "ERROR|libbinder_ndk indisponível ou sem símbolos necessários";
+    }
+
+    bool declared = false;
+    if (api.isDeclared) {
+        declared = api.isDeclared(kQcomFmAidlService);
+    }
+
+    void* binder = api.checkService(kQcomFmAidlService);
+    if (binder) {
+        api.decStrong(binder);
+        return std::string("OK|service=") + kQcomFmAidlService +
+            "|declared=" + (declared ? "true" : "unknown");
+    }
+
+    if (declared) {
+        return std::string("BLOCKED|service=") + kQcomFmAidlService +
+            "|declarado no VINTF, mas o Binder não ficou acessível ao APK";
+    }
+
+    return std::string("MISSING|service=") + kQcomFmAidlService +
+        "|AIDL não declarado/acessível; o aparelho pode usar o HAL HIDL legado";
 }
 
 }
@@ -235,4 +320,57 @@ Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeGetSignal(
     v4l2_tuner tuner{};
     if (!queryTuner(fd, &tuner)) return -1;
     return static_cast<jint>(tuner.signal);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeQcomAidlProbe(
+    JNIEnv* env,
+    jobject
+) {
+    const std::string result = probeQcomAidl();
+    LOGI("QCOM AIDL probe: %s", result.c_str());
+    return toJString(env, result);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeQcomAidlBinder(
+    JNIEnv* env,
+    jobject
+) {
+    BinderNdkApi& api = binderNdk();
+    if (!api.readyForLookup()) {
+        LOGE("Binder NDK API not available");
+        return nullptr;
+    }
+
+    void* binder = api.checkService(kQcomFmAidlService);
+    if (!binder) {
+        LOGE("QCOM FM AIDL service binder unavailable");
+        return nullptr;
+    }
+
+    jobject javaBinder = api.toJavaBinder(env, binder);
+    api.decStrong(binder);
+    return javaBinder;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_reyfxck_radiofmx_fm_nativebridge_NativeFmBridge_nativeMarkVintfStability(
+    JNIEnv* env,
+    jobject,
+    jobject javaBinder
+) {
+    BinderNdkApi& api = binderNdk();
+    if (!api.readyForMarking() || javaBinder == nullptr) {
+        return JNI_FALSE;
+    }
+
+    void* binder = api.fromJavaBinder(env, javaBinder);
+    if (!binder) {
+        return JNI_FALSE;
+    }
+
+    api.markVintf(binder);
+    api.decStrong(binder);
+    return JNI_TRUE;
 }

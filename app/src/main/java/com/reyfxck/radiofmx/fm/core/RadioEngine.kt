@@ -4,6 +4,7 @@ import android.content.Context
 import com.reyfxck.radiofmx.debug.DebugLog
 import com.reyfxck.radiofmx.fm.CafBinderBackend
 import com.reyfxck.radiofmx.fm.backend.NativeV4l2Backend
+import com.reyfxck.radiofmx.fm.backend.QcomAidlHalBackend
 import com.reyfxck.radiofmx.fm.backend.QcomSharedLibraryBackend
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,7 @@ class RadioEngine(context: Context) {
     val environment: RadioEnvironment = RadioEnvironmentDetector.detect(appContext)
 
     private val backends: List<FmBackend> = listOf(
+        QcomAidlHalBackend(),
         QcomSharedLibraryBackend(appContext),
         NativeV4l2Backend(),
         CafBinderBackend(appContext),
