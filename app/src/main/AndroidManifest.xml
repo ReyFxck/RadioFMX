@@ -21,6 +21,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.RadioFMX">
 
+        <uses-library
+            android:name="qcom.fmradio"
+            android:required="false" />
+
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

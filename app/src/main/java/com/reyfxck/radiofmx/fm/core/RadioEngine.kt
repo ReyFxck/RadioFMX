@@ -4,6 +4,7 @@ import android.content.Context
 import com.reyfxck.radiofmx.debug.DebugLog
 import com.reyfxck.radiofmx.fm.CafBinderBackend
 import com.reyfxck.radiofmx.fm.backend.NativeV4l2Backend
+import com.reyfxck.radiofmx.fm.backend.QcomSharedLibraryBackend
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,6 +22,7 @@ class RadioEngine(context: Context) {
     val environment: RadioEnvironment = RadioEnvironmentDetector.detect(appContext)
 
     private val backends: List<FmBackend> = listOf(
+        QcomSharedLibraryBackend(appContext),
         NativeV4l2Backend(),
         CafBinderBackend(appContext),
     ).sortedByDescending { it.priority }
@@ -83,22 +85,25 @@ class RadioEngine(context: Context) {
 
         selected.setPower(on, frequencyMhz)
 
-        if (on && selected.kind == BackendKind.NATIVE_V4L2) {
+        if (on && selected.kind != BackendKind.CAF_BINDER) {
             scope.launch {
-                delay(900)
-                if (activeBackend?.id == selected.id &&
-                    !selected.state.value.powered &&
-                    selected.state.value.lastError != null
-                ) {
-                    DebugLog.w(
-                        "ENGINE",
-                        "V4L2 direto não conseguiu ligar; tentando próximo backend automaticamente."
-                    )
-                    val fallback = chooseAvailableBackend(excluding = setOf(selected.id))
-                    if (fallback != null) {
-                        activate(fallback)
-                        delay(350)
-                        fallback.setPower(true, frequencyMhz)
+                repeat(24) {
+                    delay(500)
+                    if (activeBackend?.id != selected.id) return@launch
+                    val current = selected.state.value
+                    if (current.powered) return@launch
+                    if (current.lastError != null) {
+                        DebugLog.w(
+                            "ENGINE",
+                            "${selected.name} falhou ao ligar; tentando próximo backend automaticamente."
+                        )
+                        val fallback = chooseAvailableBackend(excluding = setOf(selected.id))
+                        if (fallback != null) {
+                            activate(fallback)
+                            delay(350)
+                            fallback.setPower(true, frequencyMhz)
+                        }
+                        return@launch
                     }
                 }
             }

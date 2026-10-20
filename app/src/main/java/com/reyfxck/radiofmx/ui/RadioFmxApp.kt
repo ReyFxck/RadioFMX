@@ -191,7 +191,7 @@ fun RadioFmxApp() {
     val logs by DebugLog.entries.collectAsState()
 
     LaunchedEffect(Unit) {
-        DebugLog.i("APP", "RadioFMX 0.6.0-test iniciado")
+        DebugLog.i("APP", "RadioFMX 0.7.0-test iniciado")
     }
 
     DisposableEffect(radioEngine) {
@@ -547,7 +547,7 @@ fun RadioFmxApp() {
                 maxVolume = maxVolume,
                 currentFrequency = frequency,
                 onRefresh = { radioEngine.refresh() },
-                onReconnect = { radioEngine.connect() },
+                onReconnect = { radioEngine.reprobeAndConnect() },
                 onOpenFm = { FmRadioBridge.launch(context, frequency) },
                 logs = logs,
                 onCopyLogs = {
@@ -1214,7 +1214,7 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.6.0-test")
+            DebugValue("RadioFMX", "0.7.0-test")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
