@@ -1,6 +1,8 @@
 package com.reyfxck.radiofmx.fm.backend
 
 import android.content.Context
+import android.os.Handler
+import android.os.HandlerThread
 import com.reyfxck.radiofmx.debug.DebugLog
 import com.reyfxck.radiofmx.fm.core.BackendHealth
 import com.reyfxck.radiofmx.fm.core.BackendKind
@@ -9,8 +11,8 @@ import com.reyfxck.radiofmx.fm.core.FmBackend
 import com.reyfxck.radiofmx.fm.core.RadioCapabilities
 import com.reyfxck.radiofmx.fm.core.RadioState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -19,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.lang.reflect.InvocationTargetException
+import kotlin.coroutines.CoroutineContext
 import kotlin.math.abs
 import kotlin.math.round
 
@@ -39,7 +42,20 @@ class QcomSharedLibraryBackend(context: Context) : FmBackend {
     )
 
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Qualcomm's FmReceiver constructs a PhoneStateListener during instance
+    // initialization. That listener creates a Handler using Looper.myLooper(),
+    // so every interaction with this stack must live on a real Looper thread.
+    private val qcomThread = HandlerThread("RadioFMX-Qcom").apply { start() }
+    private val qcomHandler = Handler(qcomThread.looper)
+    private val qcomDispatcher = object : CoroutineDispatcher() {
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            if (!qcomHandler.post(block)) {
+                throw IllegalStateException("Thread Qualcomm FM já foi encerrada")
+            }
+        }
+    }
+    private val scope = CoroutineScope(SupervisorJob() + qcomDispatcher)
     private val mutableState = MutableStateFlow(baseState())
     override val state: StateFlow<RadioState> = mutableState.asStateFlow()
 
@@ -325,7 +341,11 @@ class QcomSharedLibraryBackend(context: Context) : FmBackend {
             .newInstance("/dev/radio0", callback)
 
         receiver = instance
-        DebugLog.i("QCOM", "FmReceiver criado dentro do processo do RadioFMX")
+        DebugLog.i(
+            "QCOM",
+            "FmReceiver criado dentro do processo do RadioFMX em thread com Looper=" +
+                (android.os.Looper.myLooper() != null)
+        )
         return instance
     }
 
