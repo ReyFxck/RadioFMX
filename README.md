@@ -1,23 +1,42 @@
 # RadioFMX
 
-RadioFMX is an offline-first Android radio experiment built with Kotlin, Jetpack Compose, Media3 and Material 3 Expressive.
+RadioFMX is an offline-first FM radio app for Android. The goal is a single app that owns its UI and radio behavior while selecting the best hardware access path available on each device.
 
-## v0.2.0
+## Architecture
+
+RadioFMX no longer treats a ROM-specific radio app as the product. The app has a RadioEngine with pluggable FM backends:
+
+- **Native V4L2** — first choice. Probes common /dev/radio* nodes and talks to a Linux V4L2 tuner through RadioFMX's own JNI bridge.
+- **Qualcomm CAF Binder** — compatibility fallback for ROMs/devices exposing com.caf.fmradio.FMRadioService.
+- Future backends can be added for MediaTek, Samsung/vendor HALs, privileged/system builds, or other hardware without changing the Compose UI.
+
+The engine probes all supported backends, ranks them, selects the best available one, and can automatically fall back when direct V4L2 access opens but cannot initialize the vendor driver.
+
+## v0.6.0
 
 - Android 17 / API 37 target
-- Orange-first Material 3 Expressive visual identity
-- Receiver power button and powered/off visual states
-- Animated ON AIR / scanning signal bars
-- 87.5–108.0 MHz tuning in 0.1 MHz steps
-- Band scan animation and saved channel presets
-- System media volume slider plus volume up/down controls
-- Live audio-route indicator for wired headphones, USB, Bluetooth and speaker
-- Media3 local audio playback with media audio attributes, audio focus handling and noisy-route handling
-- Best-effort handoff of the selected frequency to an OEM FM Radio app when available
+- Kotlin + Jetpack Compose + Material 3 Expressive
+- Orange-first UI
+- Unified RadioEngine
+- Backend registry and capability probing
+- Native V4L2 JNI bridge
+- Direct tune, seek, signal-strength query, and scan primitives for accessible V4L2 tuners
+- Qualcomm CAF Binder fallback retained for compatibility
+- Automatic backend selection and direct-to-CAF fallback
+- In-app diagnostic terminal
+- Backend detection report in Maintenance
+- Frequency presets, volume controls, audio-route detection, speaker control when supported
+- Local Media3 audio player
 - No INTERNET permission
 
-## FM hardware limitation
+## Compatibility reality
 
-Android does not expose one universal public FM tuner API to ordinary third-party phone apps. RadioFMX can implement the tuner UI, band logic, presets and OEM handoff, but automatic signal detection and direct chip control require a vendor-specific tuner backend. If the device exposes no compatible FM app/API, the physical tuner cannot be controlled from a normal app.
+Android has no universal public FM radio API. A normal APK can only control hardware that the device exposes to it. Some phones expose a V4L2 tuner, some expose vendor services, some require privileged permissions, and some contain no usable FM receiver at all.
 
-Online radio remains intentionally optional and is not enabled in v0.2.0.
+RadioFMX therefore uses a multi-backend architecture. The same APK can support many ROMs/devices, but hardware or SELinux restrictions can still make FM unavailable on a specific phone.
+
+The app never pretends a scan succeeded when there is no hardware path.
+
+## Licensing note
+
+The native V4L2 backend in RadioFMX is an independent implementation using Linux V4L2 interfaces. External FM projects are useful engineering references, but RadioFMX does not copy GPL code into this implementation.

@@ -122,8 +122,9 @@ import com.reyfxck.radiofmx.audio.detectAudioRoute
 import com.reyfxck.radiofmx.debug.DebugLog
 import com.reyfxck.radiofmx.debug.DebugLogEntry
 import com.reyfxck.radiofmx.fm.FmRadioBridge
-import com.reyfxck.radiofmx.fm.LineageFmBackend
-import com.reyfxck.radiofmx.fm.LineageFmState
+import com.reyfxck.radiofmx.fm.core.BackendProbe
+import com.reyfxck.radiofmx.fm.core.RadioEngine
+import com.reyfxck.radiofmx.fm.core.RadioState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -184,22 +185,23 @@ fun RadioFmxApp() {
 
     val oemFmPackage = remember { FmRadioBridge.findAvailablePackage(context) }
 
-    val lineageBackend = remember { LineageFmBackend(context) }
-    val fmState by lineageBackend.state.collectAsState()
+    val radioEngine = remember { RadioEngine(context) }
+    val fmState by radioEngine.state.collectAsState()
+    val backendProbes by radioEngine.probes.collectAsState()
     val logs by DebugLog.entries.collectAsState()
 
     LaunchedEffect(Unit) {
-        DebugLog.i("APP", "RadioFMX 0.5.1-test iniciado")
+        DebugLog.i("APP", "RadioFMX 0.6.0-test iniciado")
     }
 
-    DisposableEffect(lineageBackend) {
-        lineageBackend.connect()
-        onDispose { lineageBackend.disconnect() }
+    DisposableEffect(radioEngine) {
+        radioEngine.connect()
+        onDispose { radioEngine.disconnect() }
     }
 
     LaunchedEffect(fmState.connected, fmState.powered) {
         while (fmState.connected) {
-            lineageBackend.refresh()
+            radioEngine.refresh()
             delay(if (fmState.powered) 900 else 1800)
         }
     }
@@ -300,7 +302,7 @@ fun RadioFmxApp() {
     fun tuneTo(value: Float) {
         setFrequency(value)
         if (fmState.connected && poweredOn) {
-            lineageBackend.tune(frequency)
+            radioEngine.tune(frequency)
         } else {
             DebugLog.w("FM", "Frequência selecionada na interface, mas não enviada: tuner não conectado/ligado")
         }
@@ -342,15 +344,7 @@ fun RadioFmxApp() {
                     isFavorite = favorites.any { abs(it - frequency) < 0.05f },
                     onPower = {
                         if (fmState.connected) {
-                            val turningOn = !fmState.powered
-                            if (turningOn) {
-                                scope.launch {
-                                    snackbar.showSnackbar(
-                                        "A ROM exige inicializar o tuner pela interface FM original. Ela será aberta; ligue o rádio lá e volte ao RadioFMX."
-                                    )
-                                }
-                            }
-                            lineageBackend.setPower(turningOn, frequency)
+                            radioEngine.setPower(!fmState.powered, frequency)
                         } else {
                             DebugLog.e("FM", "Power solicitado, mas o acesso ao tuner físico não está conectado")
                             scope.launch {
@@ -361,7 +355,7 @@ fun RadioFmxApp() {
                     onFrequencyChange = { setFrequency(it, persist = false) },
                     onFrequencyChangeFinished = {
                         setFrequency(frequency)
-                        if (fmState.connected && poweredOn) lineageBackend.tune(frequency)
+                        if (fmState.connected && poweredOn) radioEngine.tune(frequency)
                     },
                     onPrevious = {
                         tuneTo(if (frequency <= MinFm) MaxFm else frequency - 0.1f)
@@ -372,14 +366,14 @@ fun RadioFmxApp() {
                     onScan = {
                         if (fmState.connected) {
                             if (fmState.scanning) {
-                                lineageBackend.cancelScan()
+                                radioEngine.cancelScan()
                             } else if (!fmState.powered) {
                                 DebugLog.w("SCAN", "Scan bloqueado: ligue primeiro o tuner físico pelo botão Power")
                                 scope.launch {
                                     snackbar.showSnackbar("Ligue primeiro o rádio pelo Power; depois o SCAN poderá procurar estações reais.")
                                 }
                             } else {
-                                lineageBackend.scan()
+                                radioEngine.scan()
                             }
                         } else {
                             DebugLog.e("SCAN", "Scan solicitado, mas nenhum acesso ao tuner físico está conectado; busca não executada")
@@ -425,12 +419,13 @@ fun RadioFmxApp() {
                     maxVolume = maxVolume,
                     fmBackendConnected = fmState.connected,
                     fmPowered = fmState.powered,
+                    speakerSupported = fmState.capabilities.speakerRoute,
                     fmSpeakerEnabled = fmState.speakerEnabled,
                     onVolumeDown = { setVolume(volume - 1) },
                     onVolumeUp = { setVolume(volume + 1) },
                     onVolumeChange = { setVolume(it.roundToInt()) },
                     onSpeakerToggle = {
-                        lineageBackend.setSpeaker(!fmState.speakerEnabled)
+                        radioEngine.setSpeaker(!fmState.speakerEnabled)
                     },
                 )
 
@@ -460,7 +455,7 @@ fun RadioFmxApp() {
                             Text("Offline de verdade", fontWeight = FontWeight.Bold)
                             Text(
                                 if (fmState.connected) {
-                                    "Acesso ao receptor FM ativo: Power, sintonia, busca e alto-falante podem controlar o chip físico."
+                                    "Backend ativo: ${fmState.backendName}. O RadioFMX escolheu automaticamente o melhor acesso FM disponível."
                                 } else {
                                     "Sem internet. O acesso ao chip FM depende do tuner da ROM; veja o diagnóstico no painel da direita."
                                 },
@@ -545,13 +540,14 @@ fun RadioFmxApp() {
                     .fillMaxHeight()
                     .fillMaxWidth(0.90f),
                 fmState = fmState,
+                probes = backendProbes,
                 oemPackage = oemFmPackage,
                 route = audioRoute,
                 volume = volume,
                 maxVolume = maxVolume,
                 currentFrequency = frequency,
-                onRefresh = { lineageBackend.refresh() },
-                onReconnect = { lineageBackend.connect() },
+                onRefresh = { radioEngine.refresh() },
+                onReconnect = { radioEngine.connect() },
                 onOpenFm = { FmRadioBridge.launch(context, frequency) },
                 logs = logs,
                 onCopyLogs = {
@@ -896,6 +892,7 @@ private fun VolumeCard(
     maxVolume: Int,
     fmBackendConnected: Boolean,
     fmPowered: Boolean,
+    speakerSupported: Boolean,
     fmSpeakerEnabled: Boolean,
     onVolumeDown: () -> Unit,
     onVolumeUp: () -> Unit,
@@ -941,7 +938,11 @@ private fun VolumeCard(
                     )
                     if (fmBackendConnected) {
                         Text(
-                            if (fmSpeakerEnabled) "FM → alto-falante" else "FM → fone/rota padrão",
+                            when {
+                                !speakerSupported -> "Roteamento FM não exposto por ${if (fmPowered) "este backend" else "este acesso"}"
+                                fmSpeakerEnabled -> "FM → alto-falante"
+                                else -> "FM → fone/rota padrão"
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -970,7 +971,7 @@ private fun VolumeCard(
 
             FilledTonalButton(
                 onClick = onSpeakerToggle,
-                enabled = fmBackendConnected && fmPowered,
+                enabled = fmBackendConnected && fmPowered && speakerSupported,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Rounded.Speaker, contentDescription = null)
@@ -1163,7 +1164,8 @@ private fun ChannelRow(
 @Composable
 private fun DebugDrawer(
     modifier: Modifier,
-    fmState: LineageFmState,
+    fmState: RadioState,
+    probes: List<BackendProbe>,
     oemPackage: String?,
     route: AudioRoute,
     volume: Int,
@@ -1212,15 +1214,23 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.5.1-test")
+            DebugValue("RadioFMX", "0.6.0-test")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
             DebugValue("Saída Android", route.label)
             DebugValue("Volume", "$volume / $maxVolume")
-            DebugValue("App FM detectado", oemPackage ?: "nenhum")
-            DebugValue("CAF instalado", yesNo(fmState.available))
-            DebugValue("Binder CAF", if (fmState.connected) "conectado" else "desconectado")
+            DebugValue("App FM OEM detectado", oemPackage ?: "nenhum")
+            DebugValue("Backend ativo", fmState.backendName)
+            DebugValue("Tipo", fmState.backendKind.name)
+            DebugValue("Backend disponível", yesNo(fmState.available))
+            DebugValue("Conexão", if (fmState.connected) "conectado" else "desconectado")
+            DebugValue("Power direto", yesNo(fmState.capabilities.power && !fmState.capabilities.requiresOemBootstrap))
+            DebugValue("Precisa bootstrap OEM", yesNo(fmState.capabilities.requiresOemBootstrap))
+            DebugValue("Seek", yesNo(fmState.capabilities.seek))
+            DebugValue("Scan", yesNo(fmState.capabilities.scan))
+            DebugValue("RDS", yesNo(fmState.capabilities.rds))
+            DebugValue("Speaker route", yesNo(fmState.capabilities.speakerRoute))
             DebugValue("FM ligado", yesNo(fmState.powered))
             DebugValue("Scan físico", yesNo(fmState.scanning))
             DebugValue("Speaker FM", yesNo(fmState.speakerEnabled))
@@ -1231,6 +1241,23 @@ private fun DebugDrawer(
             DebugValue("RDS PS", fmState.programService.ifBlank { "—" })
             DebugValue("RadioText", fmState.radioText.ifBlank { "—" })
             DebugValue("Internet", "permissão ausente")
+
+            Text(
+                "Detecção de backends",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            if (probes.isEmpty()) {
+                Text("Detectando...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                probes.forEach { probe ->
+                    DebugValue(
+                        probe.name,
+                        "${probe.health.name} • ${probe.summary}" +
+                            if (probe.details.isNotEmpty()) " • ${probe.details.joinToString()}" else ""
+                    )
+                }
+            }
 
             fmState.lastError?.let {
                 Surface(
@@ -1251,7 +1278,7 @@ private fun DebugDrawer(
                 Text("Atualizar diagnóstico")
             }
             OutlinedButton(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) {
-                Text("Reconectar acesso ao tuner")
+                Text("Detectar novamente / trocar backend")
             }
             Button(
                 onClick = onOpenFm,

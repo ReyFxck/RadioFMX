@@ -11,8 +11,8 @@ android {
         applicationId = "com.reyfxck.radiofmx"
         minSdk = 26
         targetSdk = 37
-        versionCode = 6
-        versionName = "0.5.1"
+        versionCode = 7
+        versionName = "0.6.0"
     }
 
     buildTypes {
@@ -25,6 +25,26 @@ android {
     buildFeatures {
         compose = true
         aidl = true
+    }
+
+    ndkVersion = "28.2.13676358"
+
+    defaultConfig {
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     compileOptions {

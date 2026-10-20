@@ -9,6 +9,12 @@ import android.os.IBinder
 import com.caf.fmradio.IFMRadioService
 import com.caf.fmradio.IFMRadioServiceCallbacks
 import com.reyfxck.radiofmx.debug.DebugLog
+import com.reyfxck.radiofmx.fm.core.BackendHealth
+import com.reyfxck.radiofmx.fm.core.BackendKind
+import com.reyfxck.radiofmx.fm.core.BackendProbe
+import com.reyfxck.radiofmx.fm.core.FmBackend
+import com.reyfxck.radiofmx.fm.core.RadioCapabilities
+import com.reyfxck.radiofmx.fm.core.RadioState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -23,31 +29,31 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
-data class LineageFmState(
-    val available: Boolean = false,
-    val connected: Boolean = false,
-    val powered: Boolean = false,
-    val speakerEnabled: Boolean = false,
-    val antennaAvailable: Boolean = false,
-    val wiredHeadsetAvailable: Boolean = false,
-    val scanning: Boolean = false,
-    val rssi: Int? = null,
-    val programService: String = "",
-    val radioText: String = "",
-    val stations: List<Float> = emptyList(),
-    val lastError: String? = null,
-)
-
-class LineageFmBackend(context: Context) {
+class CafBinderBackend(context: Context) : FmBackend {
     companion object {
         const val PACKAGE = "com.caf.fmradio"
         const val SERVICE = "com.caf.fmradio.FMRadioService"
     }
 
+    override val id = "caf-binder"
+    override val name = "Qualcomm CAF Binder"
+    override val kind = BackendKind.CAF_BINDER
+    override val priority = 70
+    override val capabilities = RadioCapabilities(
+        power = true,
+        tune = true,
+        seek = true,
+        scan = true,
+        signalStrength = true,
+        rds = true,
+        speakerRoute = true,
+        requiresOemBootstrap = true,
+    )
+
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val _state = MutableStateFlow(LineageFmState())
-    val state: StateFlow<LineageFmState> = _state.asStateFlow()
+    private val _state = MutableStateFlow(baseState())
+    override val state: StateFlow<RadioState> = _state.asStateFlow()
 
     @Volatile
     private var radio: IFMRadioService? = null
@@ -122,7 +128,7 @@ class LineageFmBackend(context: Context) {
                 connected = false,
                 powered = false,
                 scanning = false,
-                lastError = "Serviço FM da Lineage/CAF desconectado.",
+                lastError = "Serviço Qualcomm/CAF desconectado.",
             )
         }
 
@@ -142,12 +148,33 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun connect() {
+    override fun probe(): BackendProbe {
+        val installed = isInstalled()
+        return BackendProbe(
+            id = id,
+            name = name,
+            kind = kind,
+            priority = priority,
+            health = if (installed) BackendHealth.AVAILABLE else BackendHealth.MISSING,
+            summary = if (installed) {
+                "Serviço Qualcomm/CAF encontrado; funciona como fallback de compatibilidade"
+            } else {
+                "Pacote com.caf.fmradio não encontrado"
+            },
+            details = listOf(
+                "package=$PACKAGE",
+                "service=$SERVICE",
+                "bootstrap OEM necessário para ligar em algumas ROMs",
+            ),
+        )
+    }
+
+    override fun connect() {
         val installed = isInstalled()
         _state.value = _state.value.copy(available = installed)
         DebugLog.i("FM", "Pacote $PACKAGE instalado=$installed; binding ativo=$bound")
         if (!installed) {
-            DebugLog.w("FM", "Backend CAF não encontrado nesta ROM")
+            DebugLog.w("FM", "Fallback CAF não encontrado nesta ROM")
             return
         }
         if (bound) return
@@ -170,7 +197,7 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         scanJob?.cancel()
         scanCompletion?.cancel()
         scanCompletion = null
@@ -182,7 +209,7 @@ class LineageFmBackend(context: Context) {
         radio = null
     }
 
-    fun refresh() {
+    override fun refresh() {
         scope.launch {
             val svc = radio ?: return@launch
             try {
@@ -205,7 +232,7 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun setPower(on: Boolean, frequencyMhz: Float) {
+    override fun setPower(on: Boolean, frequencyMhz: Float) {
         DebugLog.i("FM", "Pedido Power=$on, frequência=${"%.1f".format(frequencyMhz)} MHz")
         scope.launch {
             val svc = radio ?: return@launch setError("Serviço FM da ROM ainda não conectado.")
@@ -248,7 +275,7 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun tune(frequencyMhz: Float) {
+    override fun tune(frequencyMhz: Float) {
         DebugLog.i("FM", "Pedido de sintonia: ${"%.1f".format(frequencyMhz)} MHz")
         scope.launch {
             val svc = radio ?: return@launch setError("Serviço FM da ROM ainda não conectado.")
@@ -263,7 +290,7 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun seek(up: Boolean) {
+    override fun seek(up: Boolean) {
         scope.launch {
             val svc = radio ?: return@launch setError("Serviço FM da ROM ainda não conectado.")
             try {
@@ -282,10 +309,10 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun setSpeaker(enabled: Boolean) {
+    override fun setSpeaker(enabled: Boolean) {
         DebugLog.i("AUDIO", "Pedido de alto-falante FM=$enabled")
         scope.launch {
-            val svc = radio ?: return@launch setError("Controle de alto-falante exige o backend Lineage/CAF.")
+            val svc = radio ?: return@launch setError("Controle de alto-falante exige o backend CAF conectado.")
             try {
                 svc.enableSpeaker(enabled)
                 delay(150)
@@ -296,7 +323,7 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun scan() {
+    override fun scan() {
         if (scanJob?.isActive == true) {
             DebugLog.w("SCAN", "Scan ignorado: já existe uma busca em andamento")
             return
@@ -372,7 +399,7 @@ class LineageFmBackend(context: Context) {
         }
     }
 
-    fun cancelScan() {
+    override fun cancelScan() {
         DebugLog.w("SCAN", "Cancelamento de scan solicitado")
         scanCompletion?.cancel()
         scanCompletion = null
@@ -469,4 +496,11 @@ class LineageFmBackend(context: Context) {
             scanning = false,
         )
     }
+    private fun baseState() = RadioState(
+        backendId = id,
+        backendName = name,
+        backendKind = kind,
+        capabilities = capabilities,
+    )
+
 }
