@@ -1,57 +1,43 @@
 # RadioFMX
 
-RadioFMX is an offline-first FM radio app for Android. The goal is a single app that owns its UI and radio behavior while selecting the best hardware access path available on each device.
+RadioFMX is an offline-first FM radio app for Android. It is intentionally **standalone**: the RadioFMX UI and engine must control the tuner through hardware/vendor interfaces available to this process. Another FM application is never used as the radio engine.
 
 ## Architecture
 
-RadioFMX no longer treats a ROM-specific radio app as the product. The app has a RadioEngine with pluggable FM backends:
+The engine currently contains only direct backends:
 
-- **Native V4L2** — first choice. Probes common /dev/radio* nodes and talks to a Linux V4L2 tuner through RadioFMX's own JNI bridge.
-- **Qualcomm CAF Binder** — compatibility fallback for ROMs/devices exposing com.caf.fmradio.FMRadioService.
-- Future backends can be added for MediaTek, Samsung/vendor HALs, privileged/system builds, or other hardware without changing the Compose UI.
+- **Qualcomm FM HAL (AIDL)** — RadioFMX talks directly to `vendor.qti.hardware.fm.IFmHci/default` and sends the Qualcomm FM HCI commands itself when Android exposes the service.
+- **Qualcomm vendor framework** — direct in-process access through `qcom.fmradio` only when its JNI library is actually loadable by the RadioFMX process.
+- **Native V4L2** — RadioFMX's own JNI implementation for accessible Linux `/dev/radio*` tuner nodes.
 
-The engine probes all supported backends, ranks them, selects the best available one, and can automatically fall back when direct V4L2 access opens but cannot initialize the vendor driver.
+There is deliberately **no CAF/LineageOS Binder backend, no OEM-radio launcher, no package fallback, and no dependency on another FM app being open**.
 
-## v0.8.1
+## v0.9.0
 
-- Adds a Qualcomm HIDL availability/security probe when AIDL is unavailable.
-- Keeps HIDL diagnostic-only until the device proves an untrusted APK may access that HAL.
-- Avoids unsafe global media-key tricks and still never launches another radio app from Power.
+- Strict standalone mode.
+- Removed `com.caf.fmradio.FMRadioService` from backend selection.
+- Removed the CAF/LineageOS AIDL client and callbacks from the project.
+- Removed all FM-app package queries and the manual OEM-radio launcher.
+- Removed automatic or manual fallback to another radio application.
+- Diagnostics now report only hardware/vendor paths owned by the RadioFMX process.
 
-## v0.8.0
+## Motorola moto g34 5G / fogos test result
 
-- Direct Qualcomm stable FM HAL (AIDL) probe/client
-- Raw Qualcomm FM HCI power/tune/seek/scan commands when the AIDL HAL is exposed
-- VINTF-stable callback Binder created by RadioFMX
-- qcom.fmradio Java backend is now marked BLOCKED when libqcomfm_jni cannot actually load
-- No automatic launch of OEM/Lineage FM applications
-- Native V4L2 and CAF compatibility backends remain available
+The current test ROM exposes no usable direct path to a normal third-party APK:
 
-## v0.6.0
+- Qualcomm FM AIDL service: not exposed.
+- Qualcomm HIDL: not accessible to the app.
+- `qcom.fmradio` Java classes: visible, but `libqcomfm_jni.so` is outside the app linker namespace.
+- V4L2 radio node: not accessible.
 
-- Android 17 / API 37 target
-- Kotlin + Jetpack Compose + Material 3 Expressive
-- Orange-first UI
-- Unified RadioEngine
-- Backend registry and capability probing
-- Native V4L2 JNI bridge
-- Direct tune, seek, signal-strength query, and scan primitives for accessible V4L2 tuners
-- Qualcomm CAF Binder fallback retained for compatibility
-- Automatic backend selection and direct-to-CAF fallback
-- In-app diagnostic terminal
-- Backend detection report in Maintenance
-- Frequency presets, volume controls, audio-route detection, speaker control when supported
-- Local Media3 audio player
-- No INTERNET permission
+That means an ordinary standalone APK cannot currently power this phone's FM receiver without additional system privileges. RadioFMX will report that limitation instead of silently borrowing the LineageOS radio service.
+
+A future privileged/system build can add a RadioFMX-owned hardware service for ROMs that restrict FM to privileged processes.
 
 ## Compatibility reality
 
-Android has no universal public FM radio API. A normal APK can only control hardware that the device exposes to it. Some phones expose a V4L2 tuner, some expose vendor services, some require privileged permissions, and some contain no usable FM receiver at all.
-
-RadioFMX therefore uses a multi-backend architecture. The same APK can support many ROMs/devices, but hardware or SELinux restrictions can still make FM unavailable on a specific phone.
-
-The app never pretends a scan succeeded when there is no hardware path.
+Android has no universal public FM-radio API. Direct operation depends on the hardware/vendor interface and the access policy exposed by the ROM. RadioFMX does not pretend that another app's service is its own hardware backend.
 
 ## Licensing note
 
-The native V4L2 backend in RadioFMX is an independent implementation using Linux V4L2 interfaces. External FM projects are useful engineering references, but RadioFMX does not copy GPL code into this implementation.
+The native V4L2 backend in RadioFMX is an independent implementation using Linux V4L2 interfaces.

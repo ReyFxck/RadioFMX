@@ -2,7 +2,6 @@ package com.reyfxck.radiofmx.fm.core
 
 import android.content.Context
 import com.reyfxck.radiofmx.debug.DebugLog
-import com.reyfxck.radiofmx.fm.CafBinderBackend
 import com.reyfxck.radiofmx.fm.backend.NativeV4l2Backend
 import com.reyfxck.radiofmx.fm.backend.QcomAidlHalBackend
 import com.reyfxck.radiofmx.fm.backend.QcomSharedLibraryBackend
@@ -20,13 +19,12 @@ class RadioEngine(context: Context) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    val environment: RadioEnvironment = RadioEnvironmentDetector.detect(appContext)
+    val environment: RadioEnvironment = RadioEnvironmentDetector.detect()
 
     private val backends: List<FmBackend> = listOf(
         QcomAidlHalBackend(),
         QcomSharedLibraryBackend(appContext),
         NativeV4l2Backend(),
-        CafBinderBackend(appContext),
     ).sortedByDescending { it.priority }
 
     private val mutableState = MutableStateFlow(RadioState())
@@ -87,7 +85,7 @@ class RadioEngine(context: Context) {
 
         selected.setPower(on, frequencyMhz)
 
-        if (on && selected.kind != BackendKind.CAF_BINDER) {
+        if (on) {
             scope.launch {
                 repeat(24) {
                     delay(500)
@@ -101,7 +99,6 @@ class RadioEngine(context: Context) {
                         )
                         val fallback = chooseAvailableBackend(
                             excluding = setOf(selected.id),
-                            allowExternalBootstrap = false,
                         )
                         if (fallback != null) {
                             activate(fallback)
@@ -110,7 +107,7 @@ class RadioEngine(context: Context) {
                         } else {
                             DebugLog.w(
                                 "ENGINE",
-                                "Nenhum backend interno restante consegue ligar o tuner sem bootstrap externo."
+                                "Nenhum backend direto restante consegue ligar o tuner. Modo standalone não usa serviços/apps FM externos."
                             )
                         }
                         return@launch
@@ -158,9 +155,9 @@ class RadioEngine(context: Context) {
             stateCollector?.cancel()
             mutableState.value = RadioState(
                 lastError = buildString {
-                    append("Nenhum caminho de acesso FM disponível neste momento.")
+                    append("Modo standalone: nenhum backend FM direto está disponível para o RadioFMX.")
                     if (fresh.any { it.health == BackendHealth.BLOCKED }) {
-                        append(" O hardware foi detectado, mas o Android/SELinux bloqueou acesso direto.")
+                        append(" O Android/SELinux bloqueou os caminhos diretos detectados; serviços/apps de rádio da ROM não serão usados.")
                     }
                 }
             )
@@ -172,12 +169,10 @@ class RadioEngine(context: Context) {
 
     private fun chooseAvailableBackend(
         excluding: Set<String> = emptySet(),
-        allowExternalBootstrap: Boolean = true,
     ): FmBackend? {
         val probeMap = mutableProbes.value.associateBy { it.id }
         return backends
             .filterNot { it.id in excluding }
-            .filter { allowExternalBootstrap || !it.capabilities.requiresOemBootstrap }
             .firstOrNull { probeMap[it.id]?.health == BackendHealth.AVAILABLE }
     }
 
@@ -224,7 +219,7 @@ class RadioEngine(context: Context) {
         DebugLog.i(
             "DETECT",
             "Nós FM visíveis=${environment.radioNodes.ifEmpty { listOf("nenhum") }}; " +
-                "apps FM=${environment.knownFmPackages.ifEmpty { listOf("nenhum") }}"
+                "modo=standalone (serviços/apps FM externos desativados)"
         )
     }
 }

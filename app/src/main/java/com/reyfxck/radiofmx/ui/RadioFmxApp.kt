@@ -53,7 +53,6 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PowerSettingsNew
@@ -121,7 +120,6 @@ import com.reyfxck.radiofmx.audio.AudioRoute
 import com.reyfxck.radiofmx.audio.detectAudioRoute
 import com.reyfxck.radiofmx.debug.DebugLog
 import com.reyfxck.radiofmx.debug.DebugLogEntry
-import com.reyfxck.radiofmx.fm.FmRadioBridge
 import com.reyfxck.radiofmx.fm.core.BackendProbe
 import com.reyfxck.radiofmx.fm.core.RadioEngine
 import com.reyfxck.radiofmx.fm.core.RadioState
@@ -183,15 +181,13 @@ fun RadioFmxApp() {
         persistFavorites()
     }
 
-    val oemFmPackage = remember { FmRadioBridge.findAvailablePackage(context) }
-
     val radioEngine = remember { RadioEngine(context) }
     val fmState by radioEngine.state.collectAsState()
     val backendProbes by radioEngine.probes.collectAsState()
     val logs by DebugLog.entries.collectAsState()
 
     LaunchedEffect(Unit) {
-        DebugLog.i("APP", "RadioFMX 0.8.1-test iniciado")
+        DebugLog.i("APP", "RadioFMX 0.9.0-test iniciado • modo standalone")
     }
 
     DisposableEffect(radioEngine) {
@@ -541,14 +537,12 @@ fun RadioFmxApp() {
                     .fillMaxWidth(0.90f),
                 fmState = fmState,
                 probes = backendProbes,
-                oemPackage = oemFmPackage,
                 route = audioRoute,
                 volume = volume,
                 maxVolume = maxVolume,
                 currentFrequency = frequency,
                 onRefresh = { radioEngine.refresh() },
                 onReconnect = { radioEngine.reprobeAndConnect() },
-                onOpenFm = { FmRadioBridge.launch(context, frequency) },
                 logs = logs,
                 onCopyLogs = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -1166,7 +1160,6 @@ private fun DebugDrawer(
     modifier: Modifier,
     fmState: RadioState,
     probes: List<BackendProbe>,
-    oemPackage: String?,
     route: AudioRoute,
     volume: Int,
     maxVolume: Int,
@@ -1174,7 +1167,6 @@ private fun DebugDrawer(
     logs: List<DebugLogEntry>,
     onRefresh: () -> Unit,
     onReconnect: () -> Unit,
-    onOpenFm: () -> Unit,
     onCopyLogs: () -> Unit,
     onClearLogs: () -> Unit,
     onClose: () -> Unit,
@@ -1214,19 +1206,18 @@ private fun DebugDrawer(
                 style = MaterialTheme.typography.labelMedium,
             )
 
-            DebugValue("RadioFMX", "0.8.1-test")
+            DebugValue("RadioFMX", "0.9.0-test")
             DebugValue("Android", "${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
             DebugValue("Dispositivo", "${Build.MANUFACTURER} ${Build.MODEL}")
             DebugValue("Frequência UI", "${formatFrequency(currentFrequency)} MHz")
             DebugValue("Saída Android", route.label)
             DebugValue("Volume", "$volume / $maxVolume")
-            DebugValue("App FM OEM detectado", oemPackage ?: "nenhum")
+            DebugValue("Modo de hardware", "standalone • sem app/serviço FM externo")
             DebugValue("Backend ativo", fmState.backendName)
             DebugValue("Tipo", fmState.backendKind.name)
             DebugValue("Backend disponível", yesNo(fmState.available))
             DebugValue("Conexão", if (fmState.connected) "conectado" else "desconectado")
             DebugValue("Power direto", yesNo(fmState.capabilities.power && !fmState.capabilities.requiresOemBootstrap))
-            DebugValue("Precisa bootstrap OEM", yesNo(fmState.capabilities.requiresOemBootstrap))
             DebugValue("Seek", yesNo(fmState.capabilities.seek))
             DebugValue("Scan", yesNo(fmState.capabilities.scan))
             DebugValue("RDS", yesNo(fmState.capabilities.rds))
@@ -1280,16 +1271,6 @@ private fun DebugDrawer(
             OutlinedButton(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) {
                 Text("Detectar novamente / trocar backend")
             }
-            Button(
-                onClick = onOpenFm,
-                enabled = oemPackage != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Rounded.OpenInNew, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Abrir app FM OEM manualmente (diagnóstico)")
-            }
-
             LogTerminal(
                 entries = logs,
                 onCopy = onCopyLogs,
